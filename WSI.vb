@@ -172,7 +172,7 @@ Public Class WSI
                 Try
                     Dim GETfields As New Dictionary(Of String, String) From {
                             {"call", $"{Me.Text}"},
-                            {"api", "10a1bf0032a132383740feaff29dd902687fb4ac"},
+                            {"api", CLUBLOG_API_KEY},
                             {"full", 1}
                     }
                     httpClient.Timeout = New TimeSpan(0, 5, 0)        ' 5 min timeout
