@@ -27,6 +27,8 @@ Partial Class frmCluster
         DataGridView1 = New DataGridView()
         ComboBox1 = New ComboBox()
         Label1 = New Label()
+        ComboBox2 = New ComboBox()
+        Label2 = New Label()
         CType(DataGridView1, ComponentModel.ISupportInitialize).BeginInit()
         SuspendLayout()
         ' 
@@ -57,9 +59,9 @@ Partial Class frmCluster
         ' ComboBox1
         ' 
         ComboBox1.FormattingEnabled = True
-        ComboBox1.Location = New Point(988, 32)
+        ComboBox1.Location = New Point(1007, 32)
         ComboBox1.Name = "ComboBox1"
-        ComboBox1.Size = New Size(121, 23)
+        ComboBox1.Size = New Size(77, 23)
         ComboBox1.TabIndex = 2
         ' 
         ' Label1
@@ -71,11 +73,30 @@ Partial Class frmCluster
         Label1.TabIndex = 3
         Label1.Text = "Max Age"
         ' 
+        ' ComboBox2
+        ' 
+        ComboBox2.FormattingEnabled = True
+        ComboBox2.Location = New Point(1008, 77)
+        ComboBox2.Name = "ComboBox2"
+        ComboBox2.Size = New Size(76, 23)
+        ComboBox2.TabIndex = 4
+        ' 
+        ' Label2
+        ' 
+        Label2.AutoSize = True
+        Label2.Location = New Point(1021, 59)
+        Label2.Name = "Label2"
+        Label2.Size = New Size(45, 15)
+        Label2.TabIndex = 5
+        Label2.Text = "Update"
+        ' 
         ' frmCluster
         ' 
         AutoScaleDimensions = New SizeF(7F, 15F)
         AutoScaleMode = AutoScaleMode.Font
-        ClientSize = New Size(1130, 654)
+        ClientSize = New Size(1094, 654)
+        Controls.Add(Label2)
+        Controls.Add(ComboBox2)
         Controls.Add(Label1)
         Controls.Add(ComboBox1)
         Controls.Add(DataGridView1)
@@ -91,4 +112,6 @@ Partial Class frmCluster
     Friend WithEvents DataGridView1 As DataGridView
     Friend WithEvents ComboBox1 As ComboBox
     Friend WithEvents Label1 As Label
+    Friend WithEvents ComboBox2 As ComboBox
+    Friend WithEvents Label2 As Label
 End Class

@@ -92,5 +92,4 @@ Public Class Form1
         Dim dlg = New frmCluster
         dlg.Show()
     End Sub
-
 End Class

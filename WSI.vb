@@ -35,16 +35,19 @@ Public Class WSI
         Dim clublog As New List(Of (band As String, mode As String)), band As String = "", mode As String = ""
         Dim ClublogJSON As New Dictionary(Of String, Dictionary(Of String, Integer))
 
-        ' Remove any existing data
-        Me.DataGridView1.Rows.Clear()
-        Me.DataGridView1.Columns.Clear()
-        Me.DataGridView2.Rows.Clear()
-        Me.DataGridView2.Columns.Clear()
+        ' Create DataTables for DataGridView1 and DataGridView2
+        Dim dt1 As New DataTable()
+        Dim dt2 As New DataTable()
+
+        ' Initialize DataTables with columns for Band and Mode
+        dt1.Columns.Add("Mode", GetType(String)) ' Row headers
+        dt2.Columns.Add("Mode", GetType(String)) ' Row headers
+
         ' Get clublog matches
         Using httpClient As New HttpClient()
             Try
                 Dim GETfields As New Dictionary(Of String, String) From {
-                            {"api", "10a1bf0032a132383740feaff29dd902687fb4ac"},
+                            {"api", CLUBLOG_API_KEY},
                             {"call", "vk3ohm"},
                             {"log", $"{Me.Text}"}
                     }
@@ -74,6 +77,7 @@ Public Class WSI
             End Try
         End Using
 
+        ' Populate DataTable for DataGridView1
         Using cmd As New MySqlCommand()
             With cmd
                 .Connection = con
@@ -97,186 +101,350 @@ Public Class WSI
                 Label1.Text = $"QSO for {Me.Text}"
                 While sqldr.Read
                     ' create column (band) if does not exist
-                    Dim col As Integer = -1, row As Integer = -1
+                    'Dim col As Integer = -1, row As Integer = -1
                     band = sqldr("BAND")
+                    mode = sqldr("MODE")
                     Dim ColumnName = $"BAND_{band}"
+
+                    ' Add column if it doesn't exist
+                    If Not dt1.Columns.Contains(ColumnName) Then
+                        dt1.Columns.Add(ColumnName, GetType(String))
+                    End If
+
+                    ' Add row if it doesn't exist
+                    Dim row = dt1.Rows.Cast(Of DataRow).FirstOrDefault(Function(r) r("Mode").ToString() = mode)
+                    If row Is Nothing Then
+                        row = dt1.NewRow()
+                        row("Mode") = mode
+                        dt1.Rows.Add(row)
+                    End If
+
                     DXCC = sqldr("DXCC")
                     Country = sqldr("Country")
-                    Dim dgvc = DataGridView1.Columns(ColumnName)
-                    If dgvc Is Nothing Then
-                        col = DataGridView1.Columns.Add(ColumnName, band)   ' add the column
-                    Else
-                        col = DataGridView1.Columns.IndexOf(dgvc)           ' return column number
-                    End If
-                    ' create row (mode) if does not exist
-                    mode = sqldr("MODE")
-                    For Each r In DataGridView1.Rows
-                        If r.HeaderCell.value = mode Then row = r.index
-                    Next
-                    If row = -1 Then
-                        row = DataGridView1.Rows.Add()
-                        DataGridView1.Rows(row).HeaderCell.Value = mode
-                    End If
+
+                    ' Set cell value and style
                     Dim QSL As String = "W"     ' worked
-                    Dim BackColor = Color.LightGray
                     If sqldr("Confirmed") > 0 Then
                         QSL = "C"    ' confirmed
-                        BackColor = Color.Green
+                    ElseIf clublog.Any(Function(t) t.band = band And t.mode = mode) Then
+                        QSL = "CL" ' Clublog match
                     End If
-                    If QSL = "W" Then
-                        ' See if there is a clublog match
-                        Dim c = clublog.Find(Function(t) t.band = band And t.mode = mode)   ' find matching clublog entry
-                        If Not c.Equals((Nothing, Nothing)) Then
-                            ' match found - add to matrix
-                            QSL = "CL"
-                            BackColor = Color.Yellow
-                        End If
-                    End If
-                    DataGridView1.Rows(row).Cells(col).Value = QSL      ' add value into cell
-                    DataGridView1.Rows(row).Cells(col).Style.BackColor = BackColor      ' add color into cell
+                    row(ColumnName) = QSL
                 End While
             End If
             sqldr.Close()
-            ' resize the DGV
-            With DataGridView1
-                .EnableHeadersVisualStyles = False
-                .GridColor = Color.White
-                .BackgroundColor = Color.LightGray
-                With .ColumnHeadersDefaultCellStyle
-                    .BackColor = Color.LightBlue
-                    .ForeColor = Color.Blue
-                End With
-                With .RowHeadersDefaultCellStyle
-                    .BackColor = Color.LightBlue
-                    .ForeColor = Color.Blue
-                End With
-                For Each col As DataGridViewColumn In .Columns
-                    With col
-                        .SortMode = DataGridViewColumnSortMode.NotSortable
-                        .HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter
-                    End With
-                Next
-                .RowHeadersDefaultCellStyle.Padding = New Padding(0)    ' hide black triangle
-                .RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders
-                .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
-                .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
-                .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
-                .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
-            End With
         End Using
 
-        ' Second do the WSI for the nominated DXCC
-        If DXCC = 0 Then
-            ' no DXCC available. Get DXCC from clublog
-            Using httpClient As New HttpClient()
-                Try
-                    Dim GETfields As New Dictionary(Of String, String) From {
-                            {"call", $"{Me.Text}"},
+        ' Bind DataTable to DataGridView1
+        DataGridView1.DataSource = dt1
+        FormatDataGridView(DataGridView1)
+
+        ' resize the DGV
+        With DataGridView1
+            .RowHeadersVisible = False      ' hide the Select column
+            ' Set custom column headers
+            For Each col As DataGridViewColumn In .Columns
+                If col.Name.StartsWith("BAND_") Then
+                    col.HeaderText = col.Name.Replace("BAND_", "") ' Example: Change "BAND_20m" to "20m"
+                End If
+            Next
+            .EnableHeadersVisualStyles = False
+            .GridColor = Color.White
+            .BackgroundColor = Color.LightGray
+            With .ColumnHeadersDefaultCellStyle
+                .BackColor = Color.LightBlue
+                .ForeColor = Color.Blue
+            End With
+            With .RowHeadersDefaultCellStyle
+                .BackColor = Color.LightBlue
+                .ForeColor = Color.Blue
+            End With
+            For Each col As DataGridViewColumn In .Columns
+                With col
+                    .SortMode = DataGridViewColumnSortMode.NotSortable
+                    .HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End With
+            Next
+            .RowHeadersDefaultCellStyle.Padding = New Padding(0)    ' hide black triangle
+            .RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders
+            .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
+            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
+            .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
+            .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
+        End With
+
+        ' Populate DataTable for DataGridView2
+        ' Get clublog matches
+        Using httpClient As New HttpClient()
+            Try
+                Dim GETfields As New Dictionary(Of String, String) From {
                             {"api", CLUBLOG_API_KEY},
-                            {"full", 1}
+                            {"call", "vk3ohm"},
+                            {"log", $"{Me.Text}"}
                     }
-                    httpClient.Timeout = New TimeSpan(0, 5, 0)        ' 5 min timeout
-                    httpClient.DefaultRequestHeaders.Clear()
-                    Dim url As New Uri(QueryHelpers.AddQueryString("https://clublog.org/dxcc", GETfields))
-                    Dim httpResult = Await httpClient.GetAsync(url)
-                    httpResult.EnsureSuccessStatusCode()
-                    Dim response = Await httpResult.Content.ReadAsStringAsync()
-                    Dim cl As JsonDocument = JsonDocument.Parse(response)
-                    DXCC = cl.RootElement.GetProperty("DXCC").GetUInt32
-                    Country = cl.RootElement.GetProperty("Name").GetString
-                Catch ex As HttpRequestException
-                    MsgBox(ex.Message & vbCrLf & ex.StackTrace, vbCritical + vbOKOnly, "Exception")
+                httpClient.Timeout = New TimeSpan(0, 5, 0)        ' 5 min timeout
+                httpClient.DefaultRequestHeaders.Clear()
+                Try
+                    ' Get JSON from clublog, and decode
+                    Dim url As New Uri(QueryHelpers.AddQueryString("https://clublog.org/logsearchjson.php", GETfields))
+                    ClublogJSON = Await httpClient.GetFromJsonAsync(url, ClublogJSON.GetType)
+                    ' valid json
+                    For Each bnd In ClublogJSON
+                        band = $"{bnd.Key}m"
+                        For Each md In bnd.Value
+                            Select Case md.Key
+                                Case "P" : mode = "Phone"
+                                Case "D" : mode = "Digital"
+                                Case "C" : mode = "CW"
+                            End Select
+                            clublog.Add((band, mode))
+                        Next
+                    Next
+                Catch ex As Exception
+                    ' Just ignore if error
                 End Try
-            End Using
-        End If
+            Catch ex As HttpRequestException
+                MsgBox(ex.Message & vbCrLf & ex.StackTrace, vbCritical + vbOKOnly, "Exception")
+            End Try
+        End Using
+
+        ' Populate DataTable for DataGridView2
         Using cmd As New MySqlCommand()
             With cmd
                 .Connection = con
                 .CommandText = $"SELECT COL_DXCC AS DXCC, COL_BAND as BAND,
-                                    CASE WHEN {Phone} THEN 'Phone'
-                                    WHEN {CW} THEN 'CW'
-                                    WHEN {Digital} THEN 'Digital'
-                                    ELSE 'Other' END as MODE,
-                                    {Confirmed} AS Confirmed
-                                    FROM TABLE_HRD_CONTACTS_V01
-                                    WHERE COL_DXCC='{DXCC}'
-                                    GROUP BY BAND,MODE
-                                    ORDER BY COL_FREQ DESC"       ' get records of this callsign
+                                            CASE WHEN {Phone} THEN 'Phone'
+                                            WHEN {CW} THEN 'CW'
+                                            WHEN {Digital} THEN 'Digital'
+                                            ELSE 'Other' END as MODE,
+                                            {Confirmed} AS Confirmed
+                                            FROM TABLE_HRD_CONTACTS_V01
+                                            WHERE COL_DXCC='{DXCC}'
+                                            GROUP BY BAND,MODE
+                                            ORDER BY COL_FREQ DESC"       ' get records of this callsign
                 .CommandType = CommandType.Text
             End With
             sqldr = cmd.ExecuteReader
             If Not sqldr.HasRows Then
                 ' No callsign in database
-                Label2.Text = $"No QSO for {DXCC}"
+                Label2.Text = $"No QSO for {Me.Text}"
             Else
+                Label2.Text = $"QSO for {Country} ({DXCC})"
                 While sqldr.Read
                     ' create column (band) if does not exist
-                    Dim col As Integer = -1, row As Integer = -1
+                    'Dim col As Integer = -1, row As Integer = -1
                     band = sqldr("BAND")
-                    Dim ColumnName = $"BAND_{band}"
-                    DXCC = sqldr("DXCC")
-                    Dim dgvc = DataGridView2.Columns(ColumnName)
-
-                    If dgvc Is Nothing Then
-                        col = DataGridView2.Columns.Add(ColumnName, band)   ' add the column
-                    Else
-                        col = DataGridView2.Columns.IndexOf(dgvc)           ' return column number
-                    End If
-                    ' create row (mode) if does not exist
                     mode = sqldr("MODE")
-                    For Each r In DataGridView2.Rows
-                        If r.HeaderCell.value = mode Then row = r.index
-                    Next
-                    If row = -1 Then
-                        row = DataGridView2.Rows.Add()
-                        DataGridView2.Rows(row).HeaderCell.Value = mode
+                    Dim ColumnName = $"BAND_{band}"
+
+                    ' Add column if it doesn't exist
+                    If Not dt2.Columns.Contains(ColumnName) Then
+                        dt2.Columns.Add(ColumnName, GetType(String))
                     End If
+
+                    ' Add row if it doesn't exist
+                    Dim row = dt2.Rows.Cast(Of DataRow).FirstOrDefault(Function(r) r("Mode").ToString() = mode)
+                    If row Is Nothing Then
+                        row = dt2.NewRow()
+                        row("Mode") = mode
+                        dt2.Rows.Add(row)
+                    End If
+
+                    DXCC = sqldr("DXCC")
+
+                    ' Set cell value and style
                     Dim QSL As String = "W"     ' worked
-                    Dim BackColor = Color.LightGray
                     If sqldr("Confirmed") > 0 Then
                         QSL = "C"    ' confirmed
-                        BackColor = Color.Green
                     End If
-                    DataGridView2.Rows(row).Cells(col).Value = QSL      ' add value into cell
-                    DataGridView2.Rows(row).Cells(col).Style.BackColor = BackColor      ' add color into cell
+                    row(ColumnName) = QSL
                 End While
-
-                Label2.Text = $"QSO for {Country} ({DXCC})"
             End If
             sqldr.Close()
-            ' format the DGV. Copy all styling from DGV1
-            With DataGridView2
-                .EnableHeadersVisualStyles = False
-                .GridColor = DataGridView1.GridColor
-                With .ColumnHeadersDefaultCellStyle
-                    .BackColor = DataGridView1.ColumnHeadersDefaultCellStyle.BackColor
-                    .ForeColor = DataGridView1.ColumnHeadersDefaultCellStyle.ForeColor
-                    .Font = Me.DataGridView1.ColumnHeadersDefaultCellStyle.Font
-                    .Alignment = DataGridViewContentAlignment.MiddleCenter
-                End With
-                With .RowHeadersDefaultCellStyle
-                    .BackColor = DataGridView1.RowHeadersDefaultCellStyle.BackColor
-                    .ForeColor = DataGridView1.RowHeadersDefaultCellStyle.ForeColor
-                    .Font = Me.DataGridView1.RowHeadersDefaultCellStyle.Font
-                End With
-                For Each col As DataGridViewColumn In .Columns
-                    With col
-                        .SortMode = DataGridViewColumnSortMode.NotSortable
-                        .HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter
-                    End With
-                Next
-                .RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders
-                .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
-                .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
-                .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
-                .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
-            End With
         End Using
+
+        ' Bind DataTable to DataGridView1
+        DataGridView2.DataSource = dt2
+        FormatDataGridView(DataGridView2)
+
+        ' resize the DGV
+        With DataGridView2
+            .RowHeadersVisible = False      ' hide the Select column
+            ' Set custom column headers
+            For Each col As DataGridViewColumn In .Columns
+                If col.Name.StartsWith("BAND_") Then
+                    col.HeaderText = col.Name.Replace("BAND_", "") ' Example: Change "BAND_20m" to "20m"
+                End If
+            Next
+            .EnableHeadersVisualStyles = False
+            .GridColor = Color.White
+            .BackgroundColor = Color.LightGray
+            With .ColumnHeadersDefaultCellStyle
+                .BackColor = Color.LightBlue
+                .ForeColor = Color.Blue
+            End With
+            With .RowHeadersDefaultCellStyle
+                .BackColor = Color.LightBlue
+                .ForeColor = Color.Blue
+            End With
+            For Each col As DataGridViewColumn In .Columns
+                With col
+                    .SortMode = DataGridViewColumnSortMode.NotSortable
+                    .HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End With
+            Next
+            .RowHeadersDefaultCellStyle.Padding = New Padding(0)    ' hide black triangle
+            .RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders
+            .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
+            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
+            .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
+            .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
+        End With
+
+
+
+        ' ******************************** original code
+        ' Second do the WSI for the nominated DXCC
+        'If DXCC = 0 Then
+        '    ' no DXCC available. Get DXCC from clublog
+        '    Using httpClient As New HttpClient()
+        '        Try
+        '            Dim GETfields As New Dictionary(Of String, String) From {
+        '                    {"call", $"{Me.Text}"},
+        '                    {"api", CLUBLOG_API_KEY},
+        '                    {"full", 1}
+        '            }
+        '            httpClient.Timeout = New TimeSpan(0, 5, 0)        ' 5 min timeout
+        '            httpClient.DefaultRequestHeaders.Clear()
+        '            Dim url As New Uri(QueryHelpers.AddQueryString("https://clublog.org/dxcc", GETfields))
+        '            Dim httpResult = Await httpClient.GetAsync(url)
+        '            httpResult.EnsureSuccessStatusCode()
+        '            Dim response = Await httpResult.Content.ReadAsStringAsync()
+        '            Dim cl As JsonDocument = JsonDocument.Parse(response)
+        '            DXCC = cl.RootElement.GetProperty("DXCC").GetUInt32
+        '            Country = cl.RootElement.GetProperty("Name").GetString
+        '        Catch ex As HttpRequestException
+        '            MsgBox(ex.Message & vbCrLf & ex.StackTrace, vbCritical + vbOKOnly, "Exception")
+        '        End Try
+        '    End Using
+        'End If
+        'Using cmd As New MySqlCommand()
+        '    With cmd
+        '        .Connection = con
+        '        .CommandText = $"SELECT COL_DXCC AS DXCC, COL_BAND as BAND,
+        '                            CASE WHEN {Phone} THEN 'Phone'
+        '                            WHEN {CW} THEN 'CW'
+        '                            WHEN {Digital} THEN 'Digital'
+        '                            ELSE 'Other' END as MODE,
+        '                            {Confirmed} AS Confirmed
+        '                            FROM TABLE_HRD_CONTACTS_V01
+        '                            WHERE COL_DXCC='{DXCC}'
+        '                            GROUP BY BAND,MODE
+        '                            ORDER BY COL_FREQ DESC"       ' get records of this callsign
+        '        .CommandType = CommandType.Text
+        '    End With
+        '    sqldr = cmd.ExecuteReader
+        '    If Not sqldr.HasRows Then
+        '        ' No callsign in database
+        '        Label2.Text = $"No QSO for {DXCC}"
+        '    Else
+        '        While sqldr.Read
+        '            ' create column (band) if does not exist
+        '            Dim col As Integer = -1, row As Integer = -1
+        '            band = sqldr("BAND")
+        '            Dim ColumnName = $"BAND_{band}"
+        '            DXCC = sqldr("DXCC")
+        '            Dim dgvc = DataGridView2.Columns(ColumnName)
+
+        '            If dgvc Is Nothing Then
+        '                col = DataGridView2.Columns.Add(ColumnName, band)   ' add the column
+        '            Else
+        '                col = DataGridView2.Columns.IndexOf(dgvc)           ' return column number
+        '            End If
+        '            ' create row (mode) if does not exist
+        '            mode = sqldr("MODE")
+        '            For Each r In DataGridView2.Rows
+        '                If r.HeaderCell.value = mode Then row = r.index
+        '            Next
+        '            If row = -1 Then
+        '                row = DataGridView2.Rows.Add()
+        '                DataGridView2.Rows(row).HeaderCell.Value = mode
+        '            End If
+        '            Dim QSL As String = "W"     ' worked
+        '            Dim BackColor = Color.LightGray
+        '            If sqldr("Confirmed") > 0 Then
+        '                QSL = "C"    ' confirmed
+        '                BackColor = Color.Green
+        '            End If
+        '            DataGridView2.Rows(row).Cells(col).Value = QSL      ' add value into cell
+        '            DataGridView2.Rows(row).Cells(col).Style.BackColor = BackColor      ' add color into cell
+        '        End While
+
+        '        Label2.Text = $"QSO for {Country} ({DXCC})"
+        '    End If
+        '    sqldr.Close()
+        '    ' format the DGV. Copy all styling from DGV1
+        '    With DataGridView2
+        '        .EnableHeadersVisualStyles = False
+        '        .GridColor = DataGridView1.GridColor
+        '        With .ColumnHeadersDefaultCellStyle
+        '            .BackColor = DataGridView1.ColumnHeadersDefaultCellStyle.BackColor
+        '            .ForeColor = DataGridView1.ColumnHeadersDefaultCellStyle.ForeColor
+        '            .Font = Me.DataGridView1.ColumnHeadersDefaultCellStyle.Font
+        '            .Alignment = DataGridViewContentAlignment.MiddleCenter
+        '        End With
+        '        With .RowHeadersDefaultCellStyle
+        '            .BackColor = DataGridView1.RowHeadersDefaultCellStyle.BackColor
+        '            .ForeColor = DataGridView1.RowHeadersDefaultCellStyle.ForeColor
+        '            .Font = Me.DataGridView1.RowHeadersDefaultCellStyle.Font
+        '        End With
+        '        For Each col As DataGridViewColumn In .Columns
+        '            With col
+        '                .SortMode = DataGridViewColumnSortMode.NotSortable
+        '                .HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter
+        '            End With
+        '        Next
+        '        .RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders
+        '        .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
+        '        .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
+        '        .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
+        '        .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
+        '    End With
+        'End Using
+        '' ******************************** original code
         ' resize the form
         Dim borderWidth = Me.Width - Me.ClientSize.Width
         Me.MaximumSize = New Size(TableLayoutPanel2.Width + borderWidth * 2, TableLayoutPanel1.Bottom + borderWidth + 100)
         Return result
     End Function
+    ' Helper method to format DataGridView
+    Private Sub FormatDataGridView(dgv As DataGridView)
+        With dgv
+            .EnableHeadersVisualStyles = False
+            .GridColor = Color.White
+            .BackgroundColor = Color.LightGray
+            With .ColumnHeadersDefaultCellStyle
+                .BackColor = Color.LightBlue
+                .ForeColor = Color.Blue
+            End With
+            With .RowHeadersDefaultCellStyle
+                .BackColor = Color.LightBlue
+                .ForeColor = Color.Blue
+            End With
+            For Each col As DataGridViewColumn In .Columns
+                With col
+                    .SortMode = DataGridViewColumnSortMode.NotSortable
+                    .HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter
+                End With
+            Next
+            .RowHeadersDefaultCellStyle.Padding = New Padding(0) ' Hide black triangle
+            .RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders
+            .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
+            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
+            .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
+            .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
+        End With
+    End Sub
     ' The selected cell displays with a highlight background. Don't want this, so clear selection
     Private Sub DataGridView1_SelectionChanged(sender As Object, e As EventArgs) Handles DataGridView1.SelectionChanged
         DataGridView1.ClearSelection()
@@ -336,5 +504,41 @@ Public Class WSI
         ppea.Graphics.DrawImage(i, m)
         ' Tell VB there are no more pages to print
         ppea.HasMorePages = False
+    End Sub
+    Private Sub DataGridView1_CellFormatting(sender As Object, e As DataGridViewCellFormattingEventArgs) Handles DataGridView2.CellFormatting
+        DGVCellFormatting(sender, e)
+    End Sub
+    Private Sub DataGridView2_CellFormatting(sender As Object, e As DataGridViewCellFormattingEventArgs) Handles DataGridView1.CellFormatting
+        DGVCellFormatting(sender, e)
+    End Sub
+    ''' <summary>
+    ''' Handles the formatting of DataGridView cells based on their content.
+    ''' This method dynamically changes the background and foreground colors of cells
+    ''' in the DataGridView based on the cell's value.
+    ''' </summary>
+    ''' <param name="sender">The DataGridView that triggered the event.</param>
+    ''' <param name="e">Provides data for the CellFormatting event.</param>
+    Sub DGVCellFormatting(sender As Object, e As DataGridViewCellFormattingEventArgs)
+        ' Ensure the cell is not a header cell
+        If e.RowIndex >= 0 AndAlso e.ColumnIndex >= 0 Then
+            ' Get the cell value
+            Dim cellValue As String = If(e.Value IsNot Nothing, e.Value.ToString(), String.Empty)
+
+            ' Determine the background color based on the cell value
+            Select Case cellValue
+                Case "C" ' Confirmed
+                    e.CellStyle.BackColor = Color.Green
+                    e.CellStyle.ForeColor = Color.White ' Optional: Change text color for better contrast
+                Case "W" ' Worked
+                    e.CellStyle.BackColor = Color.LightGray
+                    e.CellStyle.ForeColor = Color.Black
+                Case "CL" ' Clublog match
+                    e.CellStyle.BackColor = Color.Yellow
+                    e.CellStyle.ForeColor = Color.Black
+                Case Else
+                    e.CellStyle.BackColor = Color.White ' Default color
+                    e.CellStyle.ForeColor = Color.Black
+            End Select
+        End If
     End Sub
 End Class

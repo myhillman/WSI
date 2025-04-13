@@ -2,8 +2,6 @@
 Imports System.Net
 Imports System.Threading
 Imports System.ComponentModel
-Imports System.Diagnostics.Metrics
-Imports System.Security.Policy
 
 Public Class frmCluster
     ' Constants for the DX cluster server and port
@@ -20,27 +18,20 @@ Public Class frmCluster
 
     ' Flags to track the state of the connection and operations
     Private LoggedIn As Boolean = False
-    Private ClusterBusy As Boolean = False
-    Private GetSpots As Boolean = False
-    Dim CallList As List(Of String)     ' collect on startup calls
-
-
-    'Dim ClusterTable As New DataTable()        ' cluster data
-
-    ' Enum to define actions for the BackgroundWorker
-    Enum BGWaction
-        TextBox   ' Update the TextBox with received data
-        Send      ' Send a command to the cluster
-        Logged    ' Mark the user as logged in
-        Busy      ' Mark the cluster as not busy
-    End Enum
+    Dim CallList As New List(Of String)     ' list of calls to poll
+    Private PollingTimer As System.Timers.Timer     ' timer to poll cluster
+    Private ResponseReceivedEvent As New Threading.ManualResetEvent(False)
+    Dim buffer As String = "", cr As Integer
+    Dim ClusterInitialized As Boolean = False       ' true when cluster config complete
 
     ' Handles the Load event for frmCluster
     Private Async Sub frmCluster_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         ' Create data source
 
+        Dim DisplayOrder() As String = {"CC11", "DX Call", "Frequency", "Band", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid"}    ' the order the columns are displayed
         With DataGridView1
             .AutoGenerateColumns = True
+            .RowHeadersVisible = False      ' hide the Select column
             .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
             .DataSource = GetDataSource()   ' Bind the data source
             ' Hide uninteresting columns
@@ -56,18 +47,33 @@ Public Class frmCluster
             .Columns("DX State").Visible = False
             .Columns("Spotter Country").Visible = False
             .Columns("Spotter Grid").Visible = False
-            DataGridView1.Sort(DataGridView1.Columns("Date"), ListSortDirection.Descending)
-            DataGridView1.Sort(DataGridView1.Columns("Time"), ListSortDirection.Descending)
+            .Sort(DataGridView1.Columns("Date"), ListSortDirection.Descending)
+            .Sort(DataGridView1.Columns("Time"), ListSortDirection.Descending)
+            .ColumnHeadersDefaultCellStyle.Font = New Font(DataGridView1.Font, FontStyle.Bold) ' Make the header row bold
+            .Columns("Date").DefaultCellStyle.Format = "dd-MMM"
+            ' Apply the display order
+            If DisplayOrder.Length <> .DataSource.columns.count Then Throw New Exception("There needs to be 1 entry in DisplayOrder for every column in the datasource")
+            For i As Integer = 0 To DisplayOrder.Length - 1
+                .Columns(DisplayOrder(i)).DisplayIndex = i
+            Next
             .Refresh()
         End With
 
-        ' Create the Age drop down
+        PollingTimer = New Timers.Timer With {
+            .AutoReset = True ' Ensure the timer repeats
+            }
+        AddHandler PollingTimer.Elapsed, AddressOf OnPollingTimerElapsed
 
-        BindTimeSpanComboBox(ComboBox1)
+        ' Create the Age drop down
+        BindTimeSpanComboBox(ComboBox1, AddressOf GetTimeSpanDataSource)
         ComboBox1.SelectedIndex = ComboBox1.DataSource.Rows.Count - 1 ' Set the selected index to the last item
+        ' Create the Update drop down
+        BindTimeSpanComboBox(ComboBox2, AddressOf GetUpdateSpanDataSource)
+        ComboBox2.SelectedIndex = ComboBox2.DataSource.Rows.Count - 1 ' Set the selected index to the last item
 
         ' Connect to the DX cluster server
-        Await Cluster.ConnectAsync(DXcluster, port)
+        Cluster.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, True)
+        Await Cluster.ConnectAsync(DXcluster, port).ConfigureAwait(False)
         ' Ensure the connection is fully established
         Thread.Sleep(1000)      ' wait for connection
         If Not Cluster.Connected Then
@@ -85,121 +91,129 @@ Public Class frmCluster
         While Not LoggedIn
             Application.DoEvents()
         End While
-
-        ' Enable spot retrieval
-        GetSpots = True
     End Sub
 
     ' Handles the DoWork event for the BackgroundWorker
-    Private Sub Bgw_DoWork(sender As Object, e As System.ComponentModel.DoWorkEventArgs) Handles Bgw.DoWork
-        Static Dim buffer As String = "", cr As Integer
+    Private Async Sub Bgw_DoWork(sender As Object, e As System.ComponentModel.DoWorkEventArgs) Handles Bgw.DoWork
         Try
-            While Not Bgw.CancellationPending ' Keep running until the worker is
+            While Not Bgw.CancellationPending ' Keep running until the worker is cancelled
+
                 If Cluster.Client.Available > 0 Then
+                    Debug.WriteLine("Data available from server. Setting ResponseReceivedEvent.")
                     Dim byt_to_receive(Cluster.Available - 1) As Byte
                     Cluster.Client.Receive(byt_to_receive, 0, byt_to_receive.Length, SocketFlags.None)
                     Dim String_From_Byte As String = System.Text.Encoding.ASCII.GetString(byt_to_receive)
                     buffer += String_From_Byte
+                    Debug.WriteLine($"Received: {buffer}")
+
+                    ' Signal that a response has been received
+                    ResponseReceivedEvent.Set()
 
                     If Not LoggedIn Then
                         ' Look for Login: , password: without CR
                         If buffer.EndsWith("login: ") Then
                             AppendTextSafe(buffer)
-                            SendCluster($"{ClusterUsername}{vbCrLf}") ' Send username
+                            Await SendClusterAsync($"{ClusterUsername}{vbCrLf}") ' Send username
                         ElseIf buffer.EndsWith("password: ") Then
                             AppendTextSafe(buffer)
-                            SendCluster($"{ClusterPassword}{vbCrLf}") ' Send password
+                            Await SendClusterAsync($"{ClusterPassword}{vbCrLf}") ' Send password
                         ElseIf buffer.Contains(">>") Then
                             ' We are logged in
                             AppendTextSafe(buffer)
                             LoggedIn = True
-                            SendCluster($"set/name Marc{vbCrLf}")
-                            SendCluster($"set/qth Donvale{vbCrLf}")
-                            SendCluster($"set/qra QF22oe{vbCrLf}")
-                            SendCluster($"unset/echo{vbCrLf}")
-                            SendCluster($"set/prompt >>{vbCrLf}")
-                            SendCluster($"set/ve7cc{vbCrLf}")
-                            SendCluster($"unset/wcy{vbCrLf}")
-                            SendCluster($"unset/wwv{vbCrLf}")
-                            SendCluster($"sh/filter{vbCrLf}")
-                            SendCluster($"clear/spots all{vbCrLf}")
-                            SendCluster($"sh/filter{vbCrLf}")
-                        End If
-                    Else
-                        cr = buffer.IndexOf(vbCr)   ' Get the index of the first CR character
-                        While cr <> -1
-                            Dim message As String
-                            If cr = 0 Then
-                                message = ""
-                            Else
-                                message = buffer.Substring(0, cr) ' Extract the message
+                            ' Run InitializeCluster in a separate task
+                            If Not ClusterInitialized Then
+#Disable Warning BC42358 ' Because this call is not awaited, execution of the current method continues before the call is completed
+                                Task.Run(Function() InitializeCluster())
+#Enable Warning BC42358 ' Because this call is not awaited, execution of the current method continues before the call is completed
                             End If
-                            buffer = buffer.Substring(cr + 2) ' Remove the processed message from the buffer
-                            cr = buffer.IndexOf(vbCr) ' Check for the next message
-                            ' Process the message
-                            ProcessMessage(message)
-                        End While
+                        End If
                     End If
-                End If
-                If LoggedIn Then
-                    ' Poll the cluster for spots every 20 seconds
-                    CallList = My.Settings.OnStartup.Split(","c).ToList    ' collect on startup calls
-                    If Form1.SelectedCall IsNot Nothing Then CallList.Add(Form1.SelectedCall)                ' add current callsign
-                    For Each callsign In CallList
-                        ' Send the sh/dx command
-                        SendCluster($"sh/dx {callsign}{vbCrLf}")
-
-                        ' Wait for a response
-                        Dim responseReceived As Boolean = False
-                        Dim responseTimeout As Integer = 5000 ' 5 seconds timeout
-                        Dim startTime As DateTime = DateTime.Now
-
-                        While Not responseReceived AndAlso (DateTime.Now - startTime).TotalMilliseconds < responseTimeout
-                            If Cluster.Client.Available > 0 Then
-                                responseReceived = True
-                                Exit While
-                            End If
-                            Thread.Sleep(100) ' Small delay to avoid busy-waiting
-                        End While
-
-                        If Not responseReceived Then
-                            AppendTextSafe($"No response received for callsign: {callsign}{vbCrLf}")
+                    ' Process the incoming data
+                    cr = buffer.IndexOf(vbCr)   ' Get the index of the first CR character
+                    While cr <> -1
+                        Dim message As String
+                        If cr = 0 Then
+                            message = ""
+                        Else
+                            message = buffer.Substring(0, cr) ' Extract the message
                         End If
-                        ' Process any remaining incoming data before the sleep
-                        While Cluster.Client.Available > 0
-                            Dim byt_to_receive(Cluster.Available - 1) As Byte
-                            Cluster.Client.Receive(byt_to_receive, 0, byt_to_receive.Length, SocketFlags.None)
-                            Dim String_From_Byte As String = System.Text.Encoding.ASCII.GetString(byt_to_receive)
-                            buffer += String_From_Byte
-
-                            ' Process the buffer for messages
-                            cr = buffer.IndexOf(vbCr)
-                            While cr <> -1
-                                Dim message As String
-                                If cr = 0 Then
-                                    message = ""
-                                Else
-                                    message = buffer.Substring(0, cr) ' Extract the message
-                                End If
-                                buffer = buffer.Substring(cr + 2) ' Remove the processed message from the buffer
-                                cr = buffer.IndexOf(vbCr) ' Check for the next message
-                                ProcessMessage(message) ' Process the message
-                            End While
-                        End While
-
-                        ' Wait for 20 seconds before sending the next command
-                        Thread.Sleep(20000)
-                    Next
-                    ApplyAgeFilter(ComboBox1) ' Apply the age filter to the DataGridView
+                        buffer = buffer.Substring(cr + 2) ' Remove the processed message from the buffer
+                        cr = buffer.IndexOf(vbCr) ' Check for the next message
+                        ' Process the message
+                        ProcessMessage(message)
+                    End While
                 End If
             End While
         Catch ex As Exception
             AppendTextSafe($"Error in DoWork: {ex.Message}{vbCrLf}")
         End Try
     End Sub
+    ''' <summary>
+    ''' Initializes the DX cluster with predefined settings and starts the polling timer.
+    ''' This method ensures that the cluster is configured only once and prevents multiple initializations.
+    ''' </summary>
+    ''' <returns>A Task representing the asynchronous operation.</returns>
+    Private Async Function InitializeCluster() As Task
+        If ClusterInitialized Then Return ' Prevent multiple initializations
+        Await SendClusterAsync($"set/name Marc{vbCrLf}")
+        Await SendClusterAsync($"set/qth Donvale{vbCrLf}")
+        Await SendClusterAsync($"set/qra QF22oe{vbCrLf}")
+        Await SendClusterAsync($"unset/echo{vbCrLf}")
+        Await SendClusterAsync($"set/prompt >>{vbCrLf}")
+        Await SendClusterAsync($"set/ve7cc{vbCrLf}")
+        Await SendClusterAsync($"unset/wcy{vbCrLf}")
+        Await SendClusterAsync($"unset/wwv{vbCrLf}")
+        Await SendClusterAsync($"sh/filter{vbCrLf}")
+        Await SendClusterAsync($"clear/spots all{vbCrLf}")
+        Await SendClusterAsync($"sh/filter{vbCrLf}")
+
+        ' Start the polling timer
+        If Not PollingTimer.Enabled Then
+            PollingTimer.Start()
+            PollCluster()
+        End If
+        ClusterInitialized = True
+    End Function
+    Private Sub OnPollingTimerElapsed(sender As Object, e As Timers.ElapsedEventArgs)
+        PollCluster()
+    End Sub
+    ''' <summary>
+    ''' Handles the polling logic for the DX cluster server at regular intervals.
+    ''' This method is triggered by the PollingTimer's Elapsed event.
+    ''' </summary>
+    ''' <param name="sender">The source of the event, typically the PollingTimer.</param>
+    ''' <param name="e">The ElapsedEventArgs containing the event data.</param>
+    ''' <remarks>
+    ''' This method performs the following actions:
+    ''' - Stops the timer if the user is not logged in or if the BackgroundWorker is canceled.
+    ''' - Iterates through the list of callsigns (CallList) and sends a "sh/dx" command to the cluster server for each callsign.
+    ''' - Waits for a response from the server with a timeout of 5 seconds for each command.
+    ''' - Logs a message if no response is received for a callsign.
+    ''' - Applies the age filter to the DataGridView to remove outdated spots.
+    ''' The method ensures that the polling logic is executed at regular intervals without blocking the main thread.
+    ''' </remarks>
+    Private Async Sub PollCluster()
+        If Not LoggedIn OrElse Bgw.CancellationPending Then
+            PollingTimer.Stop() ' Stop the timer if not logged in or if cancellation is requested
+            Return
+        End If
+
+        ' Create list of callsigns to poll from StartUp list, and current callsign
+        CallList.Clear()
+        If My.Settings.OnStartup <> "" Then CallList = Split(My.Settings.OnStartup, ",").ToList
+        If Form1.TextBox1.Text <> "" Then CallList.Add(Form1.TextBox1.Text)
+        ' Perform polling logic
+        For Each callsign In CallList
+            ' Send the sh/dx command
+            Await SendClusterAsync($"sh/dx {callsign}{vbCrLf}")
+        Next
+        ' Apply the age filter
+        ApplyAgeFilter(ComboBox1)
+    End Sub
     Private Sub ProcessMessage(message As String)
         ' Log the message to TextBox1
-        AppendTextSafe($"---> {message}{vbCrLf}")   ' display the message in the TextBox
+        AppendTextSafe($"<-- {message}{vbCrLf}")   ' display the message in the TextBox
         ' Handle cluster data (e.g., CC11 format)
         If message.Contains("^"c) Then
             ' Parse and display cluster data
@@ -227,21 +241,52 @@ Public Class frmCluster
                 ' Check if the DataTable already contains the data
                 Dim rows As DataRow() = dt.Select($"Frequency='{columns(1)}' AND [DX Call]='{columns(2)}' AND Date='{columns(3)}' AND Time='{columns(4)}' AND Spotter='{columns(6)}'")
                 If rows.Length = 0 Then     ' it does not, so add
-                    Dim row As DataRow = dt.NewRow() ' Create a new DataRow
-                    ' Update the DataGridView with new data
-                    For i As Integer = 0 To columns.Length - 1 ' Loop through the columns
-                        If i < dt.Columns.Count Then
-                            row(i) = columns(i) ' Fill the DataRow with data
-                        End If
-                    Next
-                    dt.Rows.Add(row) ' Add the new row to the DataTable
+                    ' Check that the callsign is in the list. Sometimes some unasked for ones are present
+                    If CallList.Contains(columns(2)) Then
+                        Dim row As DataRow = dt.NewRow() ' Create a new DataRow
+                        ' Update the DataGridView with new data
+                        For i As Integer = 0 To columns.Length - 1 ' Loop through the columns
+                            If i < dt.Columns.Count Then
+                                row(i) = columns(i) ' Fill the DataRow with data
+                            End If
+                        Next
+                        row("Band") = FreqToBand(CSng(row("Frequency")))      ' create band column
+                        dt.Rows.Add(row) ' Add the new row to the DataTable
+                    End If
                 End If
-
                 DataGridView1.Refresh() ' Refresh the DataGridView to show the new data
             End If
         End If
     End Sub
 
+    ''' <summary>
+    ''' Converts a given frequency to its corresponding amateur radio band.
+    ''' </summary>
+    ''' <param name="freq">The frequency in kHz.</param>
+    ''' <returns>A string representing the amateur radio band (e.g., "20m", "40m"). Returns "Unknown" if the frequency does not match any predefined band.</returns>
+    Private Shared ReadOnly FrequencyBands As New Dictionary(Of (Integer, Integer), String) From {
+    {(1800, 2000), "160m"},
+    {(3500, 4000), "80m"},
+    {(7000, 7300), "40m"},
+    {(10100, 10150), "30m"},
+    {(14000, 14350), "20m"},
+    {(18068, 18168), "17m"},
+    {(21000, 21450), "15m"},
+    {(24890, 24990), "12m"},
+    {(28000, 29700), "10m"},
+    {(50000, 54000), "6m"},
+    {(144000, 148000), "2m"},
+    {(222000, 225000), "1.25m"},
+    {(420000, 450000), "70cm"}
+}
+    Shared Function FreqToBand(freq As Single) As String
+        For Each band In FrequencyBands
+            If freq >= band.Key.Item1 AndAlso freq <= band.Key.Item2 Then
+                Return band.Value
+            End If
+        Next
+        Return "Unknown"
+    End Function
 
     ''' <summary>
     ''' Sends a command or message to the DX cluster server over a TCP connection.
@@ -252,27 +297,30 @@ Public Class frmCluster
     ''' using the established TCP connection. It also appends the message to the TextBox for logging purposes.
     ''' If an error occurs during the send operation, the error is logged to the TextBox.
     ''' </remarks>
-    Sub SendCluster(ByVal msg As String)
-        ' Wait until the cluster is not busy
-        'While ClusterBusy
-        '    Thread.Sleep(100)
-        '    Application.DoEvents()
-        'End While
+    Async Function SendClusterAsync(msg As String) As Task
         Try
-            ' Append the command to the TextBox for display
-            AppendTextSafe($"-> {msg}")
+            ' Reset the event before waiting for a response
+            ResponseReceivedEvent.Reset()
 
             ' Convert the command to bytes and send it to the cluster
             Dim byt_to_send() As Byte = System.Text.Encoding.ASCII.GetBytes($"{msg}")
-            Cluster.Client.Send(byt_to_send, 0, byt_to_send.Length, SocketFlags.None)
+            Await Cluster.GetStream().WriteAsync(byt_to_send)
 
-            ' Mark the cluster as busy
-            'ClusterBusy = True
-            Thread.Sleep(500)
+            ' Append the command to the TextBox for display
+            AppendTextSafe($"-> {msg}")
+            Debug.Write($"Sent: {msg}")
+
+            ' Wait for response from cluster
+            If Not ResponseReceivedEvent.WaitOne(5000) Then
+                AppendTextSafe($"SendCluster: no response to command{vbCrLf}")
+            Else
+                Debug.WriteLine("Response received.")
+            End If
+            Thread.Sleep(200) ' Small delay to allow for processing
         Catch ex As Exception
             AppendTextSafe($"Error in SendCluster: {ex.Message}{vbCrLf}")
         End Try
-    End Sub
+    End Function
     ' Handles the Closing event for frmCluster
     Private Sub frmCluster_Closing(sender As Object, e As CancelEventArgs) Handles MyBase.Closing
         ' Close the connection to the cluster
@@ -320,7 +368,7 @@ Public Class frmCluster
         ' Spotter Grid Square
         ' Spotter's IP Address(CC Cluster only)
 
-        Dim table As New DataTable(), ColumnHeadings() As String = {"CC11", "Frequency", "DX Call", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid"}
+        Dim table As New DataTable(), ColumnHeadings() As String = {"CC11", "Frequency", "DX Call", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid", "Band"}
 
         ' Add column headings
         For i As Integer = 0 To ColumnHeadings.Length - 1
@@ -343,21 +391,26 @@ Public Class frmCluster
     ''' removing older lines to maintain performance and readability.
     ''' </remarks>
     Private Sub AppendTextSafe(text As String)
-        If Me.TextBox1.InvokeRequired Then
-            Me.TextBox1.Invoke(New Action(Of String)(AddressOf AppendTextSafe), text)
-        Else
+        Try
+            If TextBox1.InvokeRequired Then
+                TextBox1.Invoke(New Action(Of String)(AddressOf AppendTextSafe), text)
+                Return
+            End If
+
             ' Append the new text
-            Me.TextBox1.AppendText(text)
+            TextBox1.AppendText(text)
 
             Const maxLines As Integer = 50  ' Limit the number of lines to 50
-            Dim lines As String() = Me.TextBox1.Lines
+            Dim lines As String() = TextBox1.Lines
             If lines.Length > maxLines Then
-                Me.TextBox1.Lines = lines.Skip(lines.Length - maxLines).ToArray()
+                TextBox1.Lines = lines.Skip(lines.Length - maxLines).ToArray()
             End If
             ' Scroll to the last line
-            Me.TextBox1.SelectionStart = Me.TextBox1.Text.Length
-            Me.TextBox1.ScrollToCaret()
-        End If
+            TextBox1.SelectionStart = TextBox1.Text.Length
+            TextBox1.ScrollToCaret()
+        Catch ex As Exception
+            Debug.WriteLine($"Error in AppendTextSafe: {ex.Message}")
+        End Try
     End Sub
     ''' <summary>
     ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
@@ -379,12 +432,37 @@ Public Class frmCluster
         table.Columns.Add("TimeSpanValue", GetType(TimeSpan)) ' Column for the TimeSpan value
 
         ' Add selectable TimeSpan values
-        table.Rows.Add("15 Mins", TimeSpan.FromMinutes(15))
-        table.Rows.Add("30 Mins", TimeSpan.FromMinutes(30))
+        table.Rows.Add("15 mins", TimeSpan.FromMinutes(15))
+        table.Rows.Add("30 mins", TimeSpan.FromMinutes(30))
         table.Rows.Add("1 hr", TimeSpan.FromHours(1))
         table.Rows.Add("3 hrs", TimeSpan.FromHours(3))
         table.Rows.Add("6 hrs", TimeSpan.FromHours(6))
-        table.Rows.Add("12 hrs", TimeSpan.FromHours(12))
+        Return table
+    End Function
+    ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
+    ''' This DataTable is used as the data source for a ComboBox to allow users to select an update interval.
+    ''' </summary>
+    ''' <returns>
+    ''' A DataTable with two columns:
+    ''' - "Description": A string describing the TimeSpan (e.g., "20 secs", "1 min").
+    ''' - "TimeSpanValue": The corresponding TimeSpan value (e.g., TimeSpan.FromSeconds(20)).
+    ''' </returns>
+    ''' <remarks>
+    ''' The method populates the DataTable with a set of predefined TimeSpan values, such as 20 seconds, 
+    ''' 1 minute, 5 minutes, etc. This is typically used to provide a dropdown list of update intervals 
+    ''' for refreshing or polling operations.
+    ''' </remarks>
+    Private Function GetUpdateSpanDataSource() As DataTable
+        Dim table As New DataTable()
+        table.Columns.Add("Description", GetType(String)) ' Column for the label
+        table.Columns.Add("TimeSpanValue", GetType(TimeSpan)) ' Column for the TimeSpan value
+
+        ' Add selectable TimeSpan values
+        table.Rows.Add("20 secs", TimeSpan.FromSeconds(20))
+        table.Rows.Add("1 min", TimeSpan.FromMinutes(1))
+        table.Rows.Add("5 mins", TimeSpan.FromMinutes(5))
+        table.Rows.Add("10 mins", TimeSpan.FromMinutes(10))
+        table.Rows.Add("1 hr", TimeSpan.FromHours(1))
         Return table
     End Function
     ''' <summary>
@@ -392,20 +470,21 @@ Public Class frmCluster
     ''' The ComboBox displays the descriptions and stores the corresponding TimeSpan values.
     ''' </summary>
     ''' <param name="cmb">The ComboBox control to bind the data source to.</param>
+    ''' <param name="GetDataSource">A delegate function that returns a DataTable containing the data to bind.</param>
     ''' <remarks>
-    ''' This method populates the ComboBox with a list of predefined TimeSpan values (e.g., 15 minutes, 30 minutes, etc.).
-    ''' The DataTable used as the data source contains two columns:
+    ''' This method dynamically binds a ComboBox to a data source provided by the `GetDataSource` function.
+    ''' The DataTable must contain two columns:
     ''' - "Description": A string describing the TimeSpan (e.g., "15 Mins", "1 hr").
     ''' - "TimeSpanValue": The actual TimeSpan value (e.g., TimeSpan.FromMinutes(15)).
     ''' The ComboBox's DisplayMember is set to "Description", and the ValueMember is set to "TimeSpanValue".
+    ''' This allows the ComboBox to display user-friendly labels while storing the corresponding TimeSpan values.
     ''' </remarks>
-    Private Sub BindTimeSpanComboBox(cmb As ComboBox)
-        Dim timeSpanDataSource As DataTable = GetTimeSpanDataSource()
+    Private Sub BindTimeSpanComboBox(cmb As ComboBox, GetDataSource As Func(Of DataTable))
+        Dim timeSpanDataSource As DataTable = GetDataSource()
         cmb.DataSource = timeSpanDataSource
         cmb.DisplayMember = "Description" ' Display the description in the dropdown
         cmb.ValueMember = "TimeSpanValue" ' Store the TimeSpan value
     End Sub
-
     Private Sub ComboBox1_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox1.SelectedIndexChanged
         ApplyAgeFilter(sender)
     End Sub
@@ -420,6 +499,12 @@ Public Class frmCluster
     ''' Rows in the DataTable with a DateTime older than the cutoff are removed, and the DataGridView is refreshed.
     ''' </remarks>
     Private Sub ApplyAgeFilter(sender As Object)
+        ' Ensure cross-thread protection for ComboBox1
+        If sender.InvokeRequired Then
+            sender.Invoke(New Action(Of Object)(AddressOf ApplyAgeFilter), sender)
+            Return
+        End If
+        ' Check if the sender is a ComboBox and has a selected value
         Dim selectedTimeSpan As TimeSpan
         Dim cmb As ComboBox = CType(sender, ComboBox)
         If cmb.SelectedValue IsNot Nothing Then
@@ -473,4 +558,88 @@ Public Class frmCluster
             End If
         End If
     End Sub
+
+    Private Sub ComboBox2_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox2.SelectedIndexChanged
+        ApplyUpdateInterval(sender)
+    End Sub
+    ''' <summary>
+    ''' Updates the polling interval for the PollingTimer based on the selected TimeSpan from ComboBox2.
+    ''' Immediately triggers a cluster poll and adjusts the timer interval for subsequent polls.
+    ''' </summary>
+    ''' <param name="sender">The control that triggered the method, expected to be ComboBox2.</param>
+    ''' <remarks>
+    ''' This method is triggered by the ComboBox2.SelectedIndexChanged event or can be called explicitly.
+    ''' It retrieves the selected TimeSpan from ComboBox2, validates the selection, and updates the PollingTimer's interval.
+    ''' Additionally, it triggers an immediate poll of the cluster to reflect the new interval change.
+    ''' The method ensures thread safety by invoking itself on the UI thread if necessary.
+    ''' </remarks>
+    Sub ApplyUpdateInterval(sender As Object)
+        ' Ensure cross-thread protection
+        If ComboBox2.InvokeRequired Then
+            ComboBox2.Invoke(New Action(Of Object)(AddressOf ApplyUpdateInterval), sender)
+            Return
+        End If
+
+        ' Retrieve the selected TimeSpan from ComboBox2
+        Dim selectedTimeSpan As TimeSpan
+        If ComboBox2.SelectedValue IsNot Nothing Then
+            If TypeOf ComboBox2.SelectedValue Is TimeSpan Then
+                selectedTimeSpan = CType(ComboBox2.SelectedValue, TimeSpan)
+            ElseIf TypeOf ComboBox2.SelectedItem Is DataRowView Then
+                Dim rowView As DataRowView = CType(ComboBox2.SelectedItem, DataRowView)
+                selectedTimeSpan = CType(rowView("TimeSpanValue"), TimeSpan)
+            Else
+                AppendTextSafe("Error: Unable to extract TimeSpan from ComboBox2.SelectedValue." & vbCrLf)
+                Return
+            End If
+        Else
+            AppendTextSafe("Error: No value selected in ComboBox2." & vbCrLf)
+            Return
+        End If
+        PollCluster()       ' poll cluster when update interval is changed
+        PollingTimer.Interval = selectedTimeSpan.TotalMilliseconds  ' Update the timer interval
+    End Sub
+    Private Sub DataGridView1_RowPrePaint(sender As Object, e As DataGridViewRowPrePaintEventArgs) Handles DataGridView1.RowPrePaint
+        Dim dgv As DataGridView = CType(sender, DataGridView)
+        Dim OpenWSIDialogs As Dictionary(Of String, Form) = GetOpenWSiDialogs
+        ' Get the current row
+        Dim row As DataGridViewRow = dgv.Rows(e.RowIndex)
+
+        ' Apply background color based on band
+        Select Case row.Cells("Band").Value
+            Case "80m"
+                row.DefaultCellStyle.BackColor = Color.LightPink ' Example: 80m band
+            Case "40m"
+                row.DefaultCellStyle.BackColor = Color.LightGreen ' Example: 40m band
+            Case "20m"
+                row.DefaultCellStyle.BackColor = Color.LightBlue ' Example: 20m band
+            Case "15m"
+                row.DefaultCellStyle.BackColor = Color.LightYellow ' Example: 15m band
+            Case "12m"
+                row.DefaultCellStyle.BackColor = Color.LightCyan ' Example: 12m band
+            Case "10m"
+                row.DefaultCellStyle.BackColor = Color.LightCoral ' Example: 10m band
+            Case Else
+                row.DefaultCellStyle.BackColor = Color.White ' Default color
+        End Select
+    End Sub
+    ''' <summary>
+    ''' Retrieves a dictionary of open WSI dialog forms.
+    ''' </summary>
+    ''' <returns>
+    ''' A dictionary where the key is the name of the form and the value is the WSI form instance.
+    ''' </returns>
+    ''' <remarks>
+    ''' This method iterates through all open forms in the application and filters out those of type WSI.
+    ''' It is useful for managing and interacting with multiple WSI dialog instances.
+    ''' </remarks>
+    Private Function GetOpenWSIDialogs() As Dictionary(Of String, Form)
+        Dim wsiDialogs As New Dictionary(Of String, Form)
+        For Each frm As Form In Application.OpenForms
+            If TypeOf frm Is WSI Then
+                wsiDialogs.Add(frm.Text, CType(frm, WSI))
+            End If
+        Next
+        Return wsiDialogs
+    End Function
 End Class
