@@ -29,6 +29,7 @@ Partial Class frmCluster
         Label1 = New Label()
         ComboBox2 = New ComboBox()
         Label2 = New Label()
+        btnClose = New Button()
         CType(DataGridView1, ComponentModel.ISupportInitialize).BeginInit()
         SuspendLayout()
         ' 
@@ -59,7 +60,7 @@ Partial Class frmCluster
         ' ComboBox1
         ' 
         ComboBox1.FormattingEnabled = True
-        ComboBox1.Location = New Point(1007, 32)
+        ComboBox1.Location = New Point(978, 32)
         ComboBox1.Name = "ComboBox1"
         ComboBox1.Size = New Size(77, 23)
         ComboBox1.TabIndex = 2
@@ -67,7 +68,7 @@ Partial Class frmCluster
         ' Label1
         ' 
         Label1.AutoSize = True
-        Label1.Location = New Point(1020, 12)
+        Label1.Location = New Point(991, 12)
         Label1.Name = "Label1"
         Label1.Size = New Size(53, 15)
         Label1.TabIndex = 3
@@ -76,7 +77,7 @@ Partial Class frmCluster
         ' ComboBox2
         ' 
         ComboBox2.FormattingEnabled = True
-        ComboBox2.Location = New Point(1008, 77)
+        ComboBox2.Location = New Point(979, 77)
         ComboBox2.Name = "ComboBox2"
         ComboBox2.Size = New Size(76, 23)
         ComboBox2.TabIndex = 4
@@ -84,17 +85,27 @@ Partial Class frmCluster
         ' Label2
         ' 
         Label2.AutoSize = True
-        Label2.Location = New Point(1021, 59)
+        Label2.Location = New Point(992, 59)
         Label2.Name = "Label2"
         Label2.Size = New Size(45, 15)
         Label2.TabIndex = 5
         Label2.Text = "Update"
         ' 
+        ' btnClose
+        ' 
+        btnClose.Location = New Point(980, 619)
+        btnClose.Name = "btnClose"
+        btnClose.Size = New Size(75, 23)
+        btnClose.TabIndex = 6
+        btnClose.Text = "Close"
+        btnClose.UseVisualStyleBackColor = True
+        ' 
         ' frmCluster
         ' 
         AutoScaleDimensions = New SizeF(7F, 15F)
         AutoScaleMode = AutoScaleMode.Font
-        ClientSize = New Size(1094, 654)
+        ClientSize = New Size(1124, 654)
+        Controls.Add(btnClose)
         Controls.Add(Label2)
         Controls.Add(ComboBox2)
         Controls.Add(Label1)
@@ -114,4 +125,5 @@ Partial Class frmCluster
     Friend WithEvents Label1 As Label
     Friend WithEvents ComboBox2 As ComboBox
     Friend WithEvents Label2 As Label
+    Friend WithEvents btnClose As Button
 End Class

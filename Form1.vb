@@ -6,7 +6,6 @@ Public Class Form1
     ' Dictionary to store the saved locations of windows from the last session
     Dim Windows As New Dictionary(Of String, Point)
     Public SelectedCall As String
-    Public OpenWSIDialogs As Dictionary(Of String, Form) ' Dictionary to store open WSI dialogs
 
     ' Handles the KeyPress event for TextBox1
     Private Sub TextBox1_KeyPress(sender As Object, e As KeyPressEventArgs) Handles TextBox1.KeyPress

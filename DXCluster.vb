@@ -3,6 +3,27 @@ Imports System.Net
 Imports System.Threading
 Imports System.ComponentModel
 Imports System.Windows.Forms.VisualStyles.VisualStyleElement.Rebar
+Imports System.Media
+
+''' <summary>
+''' Represents the main form for interacting with a DX cluster server.
+''' This form provides functionality for connecting to the server, retrieving DX spots, 
+''' and displaying them in a DataGridView. It also allows users to filter and manage 
+''' amateur radio bands and configure polling intervals.
+''' </summary>
+''' <remarks>
+''' The frmCluster class includes the following key features:
+''' - **TCP Connection**: Establishes and manages a TCP connection to the DX cluster server.
+''' - **BackgroundWorker**: Handles asynchronous communication with the server to avoid blocking the UI thread.
+''' - **Polling Timer**: Periodically polls the server for updates based on user-configured intervals.
+''' - **DataGridView**: Displays DX cluster data, including frequency, callsign, date, time, and other metadata.
+''' - **Amateur Band Management**: Allows users to select and save amateur bands for filtering displayed data.
+''' - **Cluster Initialization**: Configures the DX cluster with predefined settings upon connection.
+''' - **Thread-Safe UI Updates**: Ensures safe updates to UI controls from background threads.
+''' - **Resource Cleanup**: Properly disposes of resources (e.g., timers, connections) when the form is closed.
+''' This form is designed for amateur radio operators who want to monitor and interact with DX cluster data.
+''' It provides a user-friendly interface for managing connections, filtering data, and customizing settings.
+''' </remarks>
 
 Public Class frmCluster
     ' Constants for the DX cluster server and port
@@ -22,79 +43,54 @@ Public Class frmCluster
     Dim CallList As New List(Of String)     ' list of calls to poll
     Private PollingTimer As System.Timers.Timer     ' timer to poll cluster
     Private ResponseReceivedEvent As New Threading.ManualResetEvent(False)
-    Dim buffer As String = "", cr As Integer
+    Private buffer As String = "", cr As Integer
     Dim ClusterInitialized As Boolean = False       ' true when cluster config complete
+    Private OpenWSIDialogs As Dictionary(Of String, Form) ' Dictionary to store open WSI dialogs
 
-    ' Handles the Load event for frmCluster
-    Private Async Sub frmCluster_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        ' Create data source
+    ''' <summary>
+    ''' Saves the selected amateur bands to My.Settings whenever a checkbox is changed.
+    ''' </summary>
+    Private Sub SaveAmateurBands()
+        ' Find the GroupBox containing the checkboxes
+        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
+        If groupBox IsNot Nothing Then
+            ' Get all checked checkboxes in the GroupBox
+            Dim selectedBands = groupBox.Controls.OfType(Of CheckBox)().
+                            Where(Function(cb) cb.Checked).
+                            Select(Function(cb) cb.Text).
+                            ToList()
 
-        Dim DisplayOrder() As String = {"CC11", "DX Call", "Frequency", "Band", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid"}    ' the order the columns are displayed
-        With DataGridView1
-            .AutoGenerateColumns = True
-            .RowHeadersVisible = False      ' hide the Select column
-            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
-            .DataSource = GetDataSource()   ' Bind the data source
-            ' Hide uninteresting columns
-            .Columns("CC11").Visible = False
-            .Columns("Entity").Visible = False
-            .Columns("Spotter DXCC").Visible = False
-            .Columns("Spotter Node").Visible = False
-            .Columns("ITU DX").Visible = False
-            .Columns("CQ DX").Visible = False
-            .Columns("ITU Spotter").Visible = False
-            .Columns("CQ Spotter").Visible = False
-            .Columns("Spotter State").Visible = False
-            .Columns("DX State").Visible = False
-            .Columns("Spotter Country").Visible = False
-            .Columns("Spotter Grid").Visible = False
-            .Sort(DataGridView1.Columns("Date"), ListSortDirection.Descending)
-            .Sort(DataGridView1.Columns("Time"), ListSortDirection.Descending)
-            .ColumnHeadersDefaultCellStyle.Font = New Font(DataGridView1.Font, FontStyle.Bold) ' Make the header row bold
-            .Columns("Date").DefaultCellStyle.Format = "dd-MMM"
-            ' Apply the display order
-            If DisplayOrder.Length <> .DataSource.columns.count Then Throw New Exception("There needs to be 1 entry in DisplayOrder for every column in the datasource")
-            For i As Integer = 0 To DisplayOrder.Length - 1
-                .Columns(DisplayOrder(i)).DisplayIndex = i
-            Next
-            .Refresh()
-        End With
-
-        PollingTimer = New Timers.Timer With {
-            .AutoReset = True ' Ensure the timer repeats
-            }
-        AddHandler PollingTimer.Elapsed, AddressOf OnPollingTimerElapsed
-
-        ' Create the Age drop down
-        BindTimeSpanComboBox(ComboBox1, AddressOf GetTimeSpanDataSource)
-        ComboBox1.SelectedIndex = ComboBox1.DataSource.Rows.Count - 1 ' Set the selected index to the last item
-        ' Create the Update drop down
-        BindTimeSpanComboBox(ComboBox2, AddressOf GetUpdateSpanDataSource)
-        ComboBox2.SelectedIndex = ComboBox2.DataSource.Rows.Count - 1 ' Set the selected index to the last item
-
-        ' Connect to the DX cluster server
-        Cluster.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, True)
-        Await Cluster.ConnectAsync(DXcluster, port).ConfigureAwait(False)
-        ' Ensure the connection is fully established
-        Thread.Sleep(1000)      ' wait for connection
-        If Not Cluster.Connected Then
-            AppendTextSafe("Error: Unable to connect to the cluster server." & vbCrLf)
-            Return
+            ' Save the selected bands as a comma-separated string in My.Settings
+            My.Settings.AmateurBands = String.Join(",", selectedBands)
+            My.Settings.Save()
         End If
-        ' Configure and start the BackgroundWorker
-        With Bgw
-            .WorkerSupportsCancellation = True
-            .WorkerReportsProgress = True
-            .RunWorkerAsync()
-        End With
-
-        ' Wait until the user is logged in
-        While Not LoggedIn
-            Application.DoEvents()
-        End While
     End Sub
 
-    ' Handles the DoWork event for the BackgroundWorker
+    ''' <summary>
+    ''' Handles the DoWork event for the BackgroundWorker (Bgw).
+    ''' This method runs on a separate thread to handle asynchronous communication with the DX cluster server.
+    ''' It continuously listens for incoming data from the server and processes it.
+    ''' </summary>
+    ''' <param name="sender">The source of the event, typically the BackgroundWorker instance.</param>
+    ''' <param name="e">Provides data for the DoWork event.</param>
+    ''' <remarks>
+    ''' Key functionality of this method:
+    ''' 1. **Continuous Listening**:
+    '''    - Runs a loop that listens for incoming data from the server until the BackgroundWorker is canceled.
+    ''' 2. **Data Reception**:
+    '''    - Checks if data is available on the TCP connection and reads it into a buffer.
+    '''    - Converts the received bytes into a string and appends it to the buffer.
+    ''' 3. **Login Handling**:
+    '''    - Detects login prompts (e.g., "login: " or "password: ") and sends the appropriate credentials.
+    '''    - Marks the user as logged in once the login process is complete.
+    ''' 4. **Message Processing**:
+    '''    - Extracts individual messages from the buffer and processes them using the `ProcessMessage` method.
+    ''' 5. **Error Handling**:
+    '''    - Catches and logs any exceptions that occur during the operation to ensure the application remains stable.
+    ''' 
+    ''' This method ensures that communication with the DX cluster server is handled efficiently
+    ''' without blocking the main UI thread.
+    ''' </remarks>
     Private Async Sub Bgw_DoWork(sender As Object, e As System.ComponentModel.DoWorkEventArgs) Handles Bgw.DoWork
         Try
             While Not Bgw.CancellationPending ' Keep running until the worker is cancelled
@@ -170,29 +166,59 @@ Public Class frmCluster
         Await SendClusterAsync($"sh/filter{vbCrLf}")
 
         ' Start the polling timer
+        ' Update the polling interval
+        InvokeIfRequired(ComboBox2, AddressOf SetPollingInterval)
+
+        ' Start the timer if not already running
         If Not PollingTimer.Enabled Then
             PollingTimer.Start()
-            PollCluster()
         End If
+
+        ' Optionally trigger an immediate poll
+        PollCluster()
+
         ClusterInitialized = True
     End Function
+    ''' <summary>
+    ''' Sets the PollingTimer interval based on the selected value in ComboBox2.
+    ''' Ensures thread-safe access and validates the selected value.
+    ''' </summary>
+    Private Sub SetPollingInterval()
+        ' Validate and set the interval
+        If ComboBox2.SelectedValue IsNot Nothing AndAlso TypeOf ComboBox2.SelectedValue Is TimeSpan Then
+            Dim selectedTimeSpan As TimeSpan = CType(ComboBox2.SelectedValue, TimeSpan)
+            PollingTimer.Interval = selectedTimeSpan.TotalMilliseconds
+            Debug.WriteLine($"Polling interval set to {PollingTimer.Interval} ms.")
+        Else
+            AppendTextSafe("Error: Invalid or null SelectedValue in ComboBox2." & vbCrLf)
+        End If
+    End Sub
     Private Sub OnPollingTimerElapsed(sender As Object, e As Timers.ElapsedEventArgs)
         PollCluster()
     End Sub
     ''' <summary>
     ''' Handles the polling logic for the DX cluster server at regular intervals.
-    ''' This method is triggered by the PollingTimer's Elapsed event.
+    ''' This method is triggered by the PollingTimer's Elapsed event and performs the following actions:
+    ''' - Sends polling commands to the DX cluster server for a list of callsigns.
+    ''' - Waits for responses from the server and processes them.
+    ''' - Updates the DataGridView with the latest data and applies filters.
     ''' </summary>
-    ''' <param name="sender">The source of the event, typically the PollingTimer.</param>
-    ''' <param name="e">The ElapsedEventArgs containing the event data.</param>
     ''' <remarks>
-    ''' This method performs the following actions:
-    ''' - Stops the timer if the user is not logged in or if the BackgroundWorker is canceled.
-    ''' - Iterates through the list of callsigns (CallList) and sends a "sh/dx" command to the cluster server for each callsign.
-    ''' - Waits for a response from the server with a timeout of 5 seconds for each command.
-    ''' - Logs a message if no response is received for a callsign.
-    ''' - Applies the age filter to the DataGridView to remove outdated spots.
-    ''' The method ensures that the polling logic is executed at regular intervals without blocking the main thread.
+    ''' Key steps performed by this method:
+    ''' 1. **Connection Check**:
+    '''    - Stops the polling timer if the user is not logged in or if the BackgroundWorker is canceled.
+    ''' 2. **Callsign List Preparation**:
+    '''    - Creates a list of callsigns to poll, combining the startup list and the current callsign.
+    ''' 3. **Polling Logic**:
+    '''    - Iterates through the list of callsigns and sends a "sh/dx" command to the cluster server for each.
+    ''' 4. **Response Handling**:
+    '''    - Waits for responses from the server and processes them asynchronously.
+    ''' 5. **UI Updates**:
+    '''    - Retrieves open WSI dialogs and highlights relevant rows in the DataGridView.
+    '''    - Applies the age filter to remove outdated spots from the DataGridView.
+    ''' 
+    ''' This method ensures that polling is performed efficiently and updates the UI with the latest data
+    ''' without blocking the main thread.
     ''' </remarks>
     Private Async Sub PollCluster()
         If Not LoggedIn OrElse Bgw.CancellationPending Then
@@ -204,18 +230,47 @@ Public Class frmCluster
         CallList.Clear()
         If My.Settings.OnStartup <> "" Then CallList = Split(My.Settings.OnStartup, ",").ToList
         If Form1.TextBox1.Text <> "" Then CallList.Add(Form1.TextBox1.Text)
+
+        ' Create a copy of the CallList to avoid modification during enumeration
+        Dim callListCopy As New List(Of String)(CallList)
+
         ' Perform polling logic
-        For Each callsign In CallList
+        For Each callsign In callListCopy
             ' Send the sh/dx command
             Await SendClusterAsync($"sh/dx {callsign}{vbCrLf}")
         Next
 
         ' get the open WSI dialogs for highlighting of the DataGridView
-        Form1.OpenWSIDialogs = GetOpenWSIDialogs()
+        OpenWSIDialogs = GetOpenWSIDialogs()
 
         ' Apply the age filter
         ApplyAgeFilter(ComboBox1)
 
+    End Sub
+    ''' <summary>
+    ''' Ensures that the specified action is executed on the UI thread.
+    ''' If the calling thread is not the UI thread, the action is invoked on the UI thread.
+    ''' Otherwise, the action is executed directly.
+    ''' </summary>
+    ''' <param name="control">The control used to check the thread context.</param>
+    ''' <param name="action">The action to execute, either directly or via invocation on the UI thread.</param>
+    ''' <remarks>
+    ''' This method is useful for safely updating UI elements from a background thread.
+    ''' It checks the `InvokeRequired` property of the control to determine if the current thread
+    ''' is different from the UI thread. If so, it uses the `Invoke` method to marshal the action
+    ''' to the UI thread. Otherwise, it executes the action directly.
+    ''' 
+    ''' Example usage:
+    ''' <code>
+    ''' InvokeIfRequired(myControl, Sub() myControl.Text = "Updated Text")
+    ''' </code>
+    ''' </remarks>
+    Private Sub InvokeIfRequired(control As Control, action As Action)
+        If control.InvokeRequired Then
+            control.Invoke(action)
+        Else
+            action()
+        End If
     End Sub
     Private Sub ProcessMessage(message As String)
         ' Log the message to TextBox1
@@ -226,53 +281,11 @@ Public Class frmCluster
             ParseClusterData(message)
         End If
     End Sub
-    ''' <summary>
-    ''' Parses and processes cluster data received from the DX cluster server.
-    ''' Updates the DataGridView with new data if the received data is valid and not already present.
-    ''' </summary>
-    ''' <param name="data">The raw cluster data string received from the server.</param>
-    ''' <remarks>
-    ''' This method splits the incoming data string into columns using the "^" delimiter.
-    ''' If the data represents a valid cluster message (e.g., starts with "CC11"), it checks whether
-    ''' the data is already present in the DataTable bound to the DataGridView. If not, it adds the new data.
-    ''' The method ensures thread safety by invoking updates on the UI thread if required.
-    ''' </remarks>
-    Private Sub ParseClusterData(data As String)
-        If Me.DataGridView1.InvokeRequired Then
-            Me.DataGridView1.Invoke(New Action(Of String)(AddressOf ParseClusterData), data)
-        Else
-            Dim columns As String() = data.Split("^"c) ' Split the string into columns
-            If columns(0) = "CC11" Then     ' it's a cluster message
-                Dim dt As DataTable = CType(DataGridView1.DataSource, DataTable) ' Get the DataTable
-                ' Check if the DataTable already contains the data
-                Dim rows As DataRow() = dt.Select($"Frequency='{columns(1)}' AND [DX Call]='{columns(2)}' AND Date='{columns(3)}' AND Time='{columns(4)}' AND Spotter='{columns(6)}'")
-                If rows.Length = 0 Then     ' it does not, so add
-                    ' Check that the callsign is in the list. Sometimes some unasked for ones are present
-                    If CallList.Contains(columns(2)) Then
-                        Dim row As DataRow = dt.NewRow() ' Create a new DataRow
-                        ' Update the DataGridView with new data
-                        For i As Integer = 0 To columns.Length - 1 ' Loop through the columns
-                            If i < dt.Columns.Count Then
-                                row(i) = columns(i) ' Fill the DataRow with data
-                            End If
-                        Next
-                        row("Band") = FreqToBand(CSng(row("Frequency")))      ' create band column
-                        dt.Rows.Add(row) ' Add the new row to the DataTable
-                    End If
-                End If
-                DataGridView1.Refresh() ' Refresh the DataGridView to show the new data
-            End If
-        End If
-    End Sub
 
-    ''' <summary>
-    ''' Converts a given frequency to its corresponding amateur radio band.
-    ''' </summary>
-    ''' <param name="freq">The frequency in kHz.</param>
-    ''' <returns>A string representing the amateur radio band (e.g., "20m", "40m"). Returns "Unknown" if the frequency does not match any predefined band.</returns>
     Private Shared ReadOnly FrequencyBands As New Dictionary(Of (Integer, Integer), String) From {
     {(1800, 2000), "160m"},
     {(3500, 4000), "80m"},
+    {(5351, 5366), "60m"},
     {(7000, 7300), "40m"},
     {(10100, 10150), "30m"},
     {(14000, 14350), "20m"},
@@ -285,6 +298,11 @@ Public Class frmCluster
     {(222000, 225000), "1.25m"},
     {(420000, 450000), "70cm"}
 }
+    ''' <summary>
+    ''' Converts a given frequency to its corresponding amateur radio band.
+    ''' </summary>
+    ''' <param name="freq">The frequency in kHz.</param>
+    ''' <returns>A string representing the amateur radio band (e.g., "20m", "40m"). Returns "Unknown" if the frequency does not match any predefined band.</returns>
     Shared Function FreqToBand(freq As Single) As String
         For Each band In FrequencyBands
             If freq >= band.Key.Item1 AndAlso freq <= band.Key.Item2 Then
@@ -293,6 +311,61 @@ Public Class frmCluster
         Next
         Return "Unknown"
     End Function
+    ''' <summary>
+    ''' Infers the mode (Digital, CW, Phone) based on the given amateur frequency.
+    ''' </summary>
+    ''' <param name="frequency">The frequency in kHz.</param>
+    ''' <returns>A string representing the mode (e.g., "Digital", "CW", "Phone").</returns>
+    Public Shared Function InferMode(frequency As Single) As String
+        ' Define frequency ranges for each mode
+        Dim modeRanges As New Dictionary(Of String, List(Of (Single, Single))) From {
+        {"Digital", New List(Of (Single, Single)) From {
+            (1838, 1840), ' 160m Digital
+            (3580, 3600), ' 80m Digital
+            (7035, 7045), ' 40m Digital
+            (10130, 10150), ' 30m Digital
+            (14070, 14099), ' 20m Digital
+            (18100, 18110), ' 17m Digital
+            (21070, 21100), ' 15m Digital
+            (24910, 24930), ' 12m Digital
+            (28120, 28150)  ' 10m Digital
+        }},
+        {"CW", New List(Of (Single, Single)) From {
+            (1800, 1840), ' 160m CW
+            (3500, 3600), ' 80m CW
+            (7000, 7040), ' 40m CW
+            (10100, 10150), ' 30m CW
+            (14000, 14070), ' 20m CW
+            (18068, 18100), ' 17m CW
+            (21000, 21070), ' 15m CW
+            (24890, 24910), ' 12m CW
+            (28000, 28120)  ' 10m CW
+        }},
+        {"Phone", New List(Of (Single, Single)) From {
+            (1840, 2000), ' 160m Phone
+            (3600, 4000), ' 80m Phone
+            (7040, 7300), ' 40m Phone
+            (14100, 14350), ' 20m Phone
+            (18110, 18168), ' 17m Phone
+            (21100, 21450), ' 15m Phone
+            (24930, 24990), ' 12m Phone
+            (28150, 29700)  ' 10m Phone
+        }}
+    }
+
+        ' Check the frequency against each mode's ranges
+        For Each mode In modeRanges
+            For Each range In mode.Value
+                If frequency >= range.Item1 AndAlso frequency <= range.Item2 Then
+                    Return mode.Key
+                End If
+            Next
+        Next
+
+        ' Return "Unknown" if no match is found
+        Return "Unknown"
+    End Function
+
     ''' <summary>
     ''' Retrieves a dictionary of open WSI dialog forms.
     ''' </summary>
@@ -325,6 +398,23 @@ Public Class frmCluster
     ''' </remarks>
     Async Function SendClusterAsync(msg As String) As Task
         Try
+            ' Check if the Cluster is connected
+            If Not Cluster.Connected Then
+                AppendTextSafe("Connection lost. Attempting to reconnect..." & vbCrLf)
+                Try
+                    Await Cluster.ConnectAsync(DXcluster, port).ConfigureAwait(False)
+                    Thread.Sleep(1000) ' Wait for connection
+                    If Not Cluster.Connected Then
+                        AppendTextSafe("Reconnection failed." & vbCrLf)
+                        Return
+                    End If
+                    AppendTextSafe("Reconnected successfully." & vbCrLf)
+                Catch ex As Exception
+                    AppendTextSafe($"Reconnection failed: {ex.Message}" & vbCrLf)
+                    Return
+                End Try
+            End If
+
             ' Reset the event before waiting for a response
             ResponseReceivedEvent.Reset()
 
@@ -347,10 +437,342 @@ Public Class frmCluster
             AppendTextSafe($"Error in SendCluster: {ex.Message}{vbCrLf}")
         End Try
     End Function
-    ' Handles the Closing event for frmCluster
+    ''' <summary>
+    ''' Handles the Closing event for the frmCluster form.
+    ''' Performs cleanup operations to ensure proper resource disposal and prevent memory leaks.
+    ''' </summary>
+    ''' <param name="sender">The source of the event, typically the frmCluster form.</param>
+    ''' <param name="e">Provides data for the CancelEventArgs event, allowing the closing operation to be canceled if needed.</param>
+    ''' <remarks>
+    ''' This method performs the following cleanup tasks:
+    ''' 1. Stops and disposes of the PollingTimer to release resources and prevent further polling.
+    ''' 2. Cancels the BackgroundWorker if it is running to stop any ongoing asynchronous operations.
+    ''' 3. Closes the TCP connection to the DX cluster server to ensure the connection is properly terminated.
+    ''' 
+    ''' These steps ensure that all resources used by the frmCluster form are released when the form is closed,
+    ''' preventing potential issues such as memory leaks or unresponsive background tasks.
+    ''' </remarks>
     Private Sub frmCluster_Closing(sender As Object, e As CancelEventArgs) Handles MyBase.Closing
-        ' Close the connection to the cluster
-        Cluster.Close()
+        ' Close the form
+        ' Stop the polling timer
+        If PollingTimer IsNot Nothing Then
+            PollingTimer.Stop()
+            PollingTimer.Dispose()
+        End If
+
+        ' Cancel the background worker
+        If Bgw IsNot Nothing AndAlso Bgw.IsBusy Then
+            Bgw.CancelAsync()
+        End If
+
+        ' Close the TCP connection
+        If Cluster IsNot Nothing AndAlso Cluster.Connected Then
+            Cluster.Close()
+        End If
+    End Sub
+    ''' <summary>
+    ''' Safely appends text to a TextBox control from any thread.
+    ''' Ensures thread-safe updates to the TextBox by invoking the update on the UI thread if necessary.
+    ''' </summary>
+    ''' <param name="text">The text to append to the TextBox.</param>
+    ''' <remarks>
+    ''' This method is useful in scenarios where background threads (e.g., a BackgroundWorker) 
+    ''' need to update the UI, which is not thread-safe by default.
+    ''' It also limits the number of lines in the TextBox to a maximum of 50, 
+    ''' removing older lines to maintain performance and readability.
+    ''' </remarks>
+    Private Sub AppendTextSafe(text As String)
+        Try
+            If TextBox1.InvokeRequired Then
+                TextBox1.Invoke(New Action(Of String)(AddressOf AppendTextSafe), text)
+                Return
+            End If
+
+            ' Append the new text
+            TextBox1.AppendText(text)
+
+            Const maxLines As Integer = 50  ' Limit the number of lines to 50
+            Dim lines As String() = TextBox1.Lines
+            If lines.Length > maxLines Then
+                TextBox1.Lines = lines.Skip(lines.Length - maxLines).ToArray()
+            End If
+            ' Scroll to the last line
+            TextBox1.SelectionStart = TextBox1.Text.Length
+            TextBox1.ScrollToCaret()
+        Catch ex As Exception
+            Debug.WriteLine($"Error in AppendTextSafe: {ex.Message}")
+        End Try
+    End Sub
+    ''' <summary>
+    ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
+    ''' This DataTable is used as the data source for a ComboBox to allow users to select an update interval.
+    ''' </summary>
+    ''' <returns>
+    ''' A DataTable with two columns:
+    ''' - "Description": A string describing the TimeSpan (e.g., "20 secs", "1 min").
+    ''' - "TimeSpanValue": The corresponding TimeSpan value (e.g., TimeSpan.FromSeconds(20)).
+    ''' </returns>
+    ''' <remarks>
+    ''' The method populates the DataTable with a set of predefined TimeSpan values, such as 20 seconds, 
+    ''' 1 minute, 5 minutes, etc. This is typically used to provide a dropdown list of update intervals 
+    ''' for refreshing or polling operations.
+    ''' </remarks>
+    Private Function GetUpdateSpanDataSource() As DataTable
+        Dim table As New DataTable()
+        table.Columns.Add("Description", GetType(String)) ' Column for the label
+        table.Columns.Add("TimeSpanValue", GetType(TimeSpan)) ' Column for the TimeSpan value
+
+        ' Add selectable TimeSpan values
+        table.Rows.Add("20 secs", TimeSpan.FromSeconds(20))
+        table.Rows.Add("1 min", TimeSpan.FromMinutes(1))
+        table.Rows.Add("5 mins", TimeSpan.FromMinutes(5))
+        table.Rows.Add("10 mins", TimeSpan.FromMinutes(10))
+        table.Rows.Add("1 hr", TimeSpan.FromHours(1))
+        Return table
+    End Function
+
+    Private Const AmateurBandsGroupBoxText As String = "Amateur Bands"  ' name of group containing Amateur Band check boxes
+    Private Const BandColumnName As String = "Band"
+
+    Private Const TimeSpanValueColumnName As String = "TimeSpanValue"
+
+    ''' <summary>
+    ''' Retrieves the underlying DataTable from a DataGridView's DataSource.
+    ''' </summary>
+    ''' <param name="dgv">The DataGridView control whose DataSource is being accessed.</param>
+    ''' <returns>
+    ''' The DataTable if the DataSource is of type DataTable or DataView; otherwise, throws an exception.
+    ''' </returns>
+    ''' <exception cref="InvalidOperationException">
+    ''' Thrown if the DataSource is not of type DataTable or DataView.
+    ''' </exception>
+    ''' <remarks>
+    ''' This method is useful for extracting the DataTable from a DataGridView, regardless of whether
+    ''' the DataSource is directly a DataTable or wrapped in a DataView. It ensures consistent access
+    ''' to the underlying data structure for operations like filtering, updating, or iterating through rows.
+    ''' </remarks>
+    Private Function GetDataTableFromDataGridView(dgv As DataGridView) As DataTable
+        If TypeOf dgv.DataSource Is DataTable Then
+            Return CType(dgv.DataSource, DataTable)
+        ElseIf TypeOf dgv.DataSource Is DataView Then
+            Return CType(CType(dgv.DataSource, DataView).Table, DataTable)
+        Else
+            Throw New InvalidOperationException("Unexpected DataSource type.")
+        End If
+    End Function
+
+#Region "DataGridView Helpers"
+    ' Methods related to DataGridView
+    ''' <summary>
+    ''' Updates the DataGridView's DataSource to filter rows based on the state of the checkboxes.
+    ''' </summary>
+    Private Sub UpdateDataGridViewFilter()
+        SaveAmateurBands() ' Save the selected bands to settings
+        ' Get the "Amateur Bands" group box
+        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
+        If groupBox Is Nothing Then Return ' Exit if the group box is not found
+
+        ' Get the list of checked bands
+        Dim checkedBands = groupBox.Controls.OfType(Of CheckBox)().
+                       Where(Function(cb) cb.Checked).
+                       Select(Function(cb) cb.Text).
+                       ToList()
+        ' Get the DataTable from the DataGridView's DataSource
+        Dim dt As DataTable = GetDataTableFromDataGridView(DataGridView1)
+        If dt IsNot Nothing Then
+            dt.DefaultView.RowFilter = String.Join(" OR ", checkedBands.Select(Function(b) $"{BandColumnName} = '{b}'"))
+        End If
+    End Sub
+    ''' <summary>
+    ''' Handles the RowPrePaint event for DataGridView1.
+    ''' Dynamically highlights rows in the DataGridView based on whether a matching 
+    ''' callsign and band exist in the WSI dialog's DataGridView.
+    ''' </summary>
+    ''' <param name="sender">The DataGridView that triggered the event.</param>
+    ''' <param name="e">Provides data for the RowPrePaint event.</param>
+    ''' <remarks>
+    ''' This method performs the following actions:
+    ''' - Retrieves the current row being painted.
+    ''' - Extracts the "DX Call" and "Band" values from the row.
+    ''' - Checks for a matching entry in the WSI dialog's DataGridView using the extracted values.
+    ''' - If the WSI dialog contains a DataGridView with a matching "Band" column, the row's background 
+    '''   is reset to white, indicating a previous contact on this band.
+    ''' - If no matching "Band" column is found, the row is highlighted with a green background, 
+    '''   indicating no previous contact on this band.
+    ''' - Throws an exception if the DataGridView1 control cannot be located in the WSI dialog.
+    ''' </remarks>
+
+    Private Sub DataGridView1_RowPrePaint(sender As Object, e As DataGridViewRowPrePaintEventArgs) Handles DataGridView1.RowPrePaint
+        Dim dgv As DataGridView = CType(sender, DataGridView)
+        ' Get the current row
+        Dim row As DataGridViewRow = dgv.Rows(e.RowIndex)
+
+        ' Get the "Amateur Bands" group box
+        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
+        If groupBox Is Nothing Then Return ' Exit if the group box is not found
+
+        ' Get the band value from the current row
+        Dim band As String = row.Cells("Band").Value?.ToString()
+        If String.IsNullOrEmpty(band) Then Return ' Exit if the band value is empty
+
+        If OpenWSIDialogs IsNot Nothing Then
+            Dim wsiDialog = OpenWSIDialogs(row.Cells("DX Call").Value)    ' get WSI dialog for this call
+            If wsiDialog IsNot Nothing Then
+                Dim dgv1 = CType(FindControlRecursive(wsiDialog.Controls(0), "DataGridView1"), DataGridView)    ' find the DataGridView control
+                If dgv1 Is Nothing Then
+                    Throw New Exception($"Could not locate DataGridView1 in {wsiDialog.Name}")
+                Else
+                    If dgv1.DataSource IsNot Nothing Then
+                        ' Get the DataTable from wsi form DataGridView1.DataSource
+                        Dim dt As DataTable = TryCast(dgv1.DataSource, DataTable)
+                        ' Check for any value (W, C, CL) in band column, i.e. column exists
+                        If dt.Columns.Contains($"BAND_{row.Cells("Band").Value}") Then
+                            ' Reset the background color if previous contact on this band
+                            row.DefaultCellStyle.BackColor = Color.White
+                        Else
+                            ' Highlight the row if no contact on this band
+                            row.DefaultCellStyle.BackColor = Color.LightGreen
+                            SystemSounds.Beep.Play() ' Plays an exclamation sound
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End Sub
+    ''' <summary>
+    ''' Recursively searches for a control with the specified name within a parent control's hierarchy.
+    ''' </summary>
+    ''' <param name="parent">The parent control to start the search from.</param>
+    ''' <param name="name">The name of the control to search for.</param>
+    ''' <returns>
+    ''' The control with the specified name if found; otherwise, Nothing.
+    ''' </returns>
+    ''' <remarks>
+    ''' This method is useful for locating controls that may be nested within containers 
+    ''' (e.g., Panels, GroupBoxes) and are not directly accessible from the top-level Controls collection.
+    ''' </remarks>
+    Private Function FindControlRecursive(parent As Control, name As String) As Control
+        For Each ctrl As Control In parent.Controls
+            If ctrl.Name = name Then Return ctrl
+            Dim found = FindControlRecursive(ctrl, name)
+            If found IsNot Nothing Then Return found
+        Next
+        Return Nothing
+    End Function
+    ''' <summary>
+    ''' Parses and processes cluster data received from the DX cluster server.
+    ''' Updates the DataGridView with new data if the received data is valid and not already present.
+    ''' </summary>
+    ''' <param name="data">The raw cluster data string received from the server.</param>
+    ''' <remarks>
+    ''' This method splits the incoming data string into columns using the "^" delimiter.
+    ''' If the data represents a valid cluster message (e.g., starts with "CC11"), it checks whether
+    ''' the data is already present in the DataTable bound to the DataGridView. If not, it adds the new data.
+    ''' The method ensures thread safety by invoking updates on the UI thread if required.
+    ''' </remarks>
+    Private Sub ParseClusterData(data As String)
+        If Me.DataGridView1.InvokeRequired Then
+            Me.DataGridView1.Invoke(New Action(Of String)(AddressOf ParseClusterData), data)
+        Else
+            Dim columns As String() = data.Split("^"c) ' Split the string into columns
+            Dim dt As DataTable
+            If columns(0) = "CC11" Then     ' it's a cluster message
+                If TypeOf DataGridView1.DataSource Is DataTable Then
+                    dt = CType(DataGridView1.DataSource, DataTable)
+                ElseIf TypeOf DataGridView1.DataSource Is DataView Then
+                    dt = CType(CType(DataGridView1.DataSource, DataView).Table, DataTable)
+                Else
+                    Throw New InvalidOperationException("Unsupported DataSource type.")
+                End If
+                ' Check if the DataTable already contains the data
+                Dim rows As DataRow() = dt.Select($"Frequency='{columns(1)}' AND [DX Call]='{columns(2)}' AND Date='{columns(3)}' AND Time='{columns(4)}' AND Spotter='{columns(6)}'")
+                If rows.Length = 0 Then     ' it does not, so add
+                    ' Check that the callsign is in the list. Sometimes some unasked for ones are present
+                    If CallList.Contains(columns(2)) Then
+                        Dim row As DataRow = dt.NewRow() ' Create a new DataRow
+                        ' Update the DataGridView with new data
+                        For i As Integer = 0 To columns.Length - 1 ' Loop through the columns
+                            If i < dt.Columns.Count Then
+                                row(i) = columns(i) ' Fill the DataRow with data
+                            End If
+                        Next
+                        row("Band") = FreqToBand(CSng(row("Frequency")))      ' create band column
+                        row("Mode") = InferMode(CSng(row("Frequency")))      ' create mode column")
+                        dt.Rows.Add(row) ' Add the new row to the DataTable
+                    End If
+                End If
+                DataGridView1.Refresh() ' Refresh the DataGridView to show the new data
+            End If
+        End If
+    End Sub
+    ''' <summary>
+    ''' Filters the rows in the DataGridView's underlying DataTable based on the selected TimeSpan from the ComboBox.
+    ''' Removes rows where the combined Date and Time values are older than the calculated cutoff DateTime.
+    ''' </summary>
+    ''' <param name="sender">The control that triggered the method, expected to be ComboBox1.</param>
+    ''' <remarks>
+    ''' This method is triggered by the ComboBox1.SelectedIndexChanged event or can be called explicitly.
+    ''' It calculates a cutoff DateTime by subtracting the selected TimeSpan from the current UTC time.
+    ''' Rows in the DataTable with a DateTime older than the cutoff are removed, and the DataGridView is refreshed.
+    ''' </remarks>
+    Private Sub ApplyAgeFilter(sender As Object)
+        ' Ensure cross-thread protection for ComboBox1
+        If sender.InvokeRequired Then
+            sender.Invoke(New Action(Of Object)(AddressOf ApplyAgeFilter), sender)
+            Return
+        End If
+        ' Check if the sender is a ComboBox and has a selected value
+        Dim selectedTimeSpan As TimeSpan
+        Dim cmb As ComboBox = CType(sender, ComboBox)
+        If cmb.SelectedValue IsNot Nothing Then
+            ' Handle the case where SelectedValue is a DataRowView
+            If TypeOf cmb.SelectedValue Is TimeSpan Then
+                selectedTimeSpan = CType(cmb.SelectedValue, TimeSpan)
+            ElseIf TypeOf cmb.SelectedItem Is DataRowView Then
+                Dim rowView As DataRowView = CType(cmb.SelectedItem, DataRowView)
+                selectedTimeSpan = CType(rowView("TimeSpanValue"), TimeSpan)
+            Else
+                AppendTextSafe("Error: Unable to extract TimeSpan from SelectedValue." & vbCrLf)
+                Return
+            End If
+            ' Delete any spots older than age
+
+            ' Calculate the cutoff DateTime
+            Dim cutoffDateTime As DateTime = DateTime.UtcNow.Subtract(selectedTimeSpan)
+
+            Dim dt As DataTable = GetDataTableFromDataGridView(DataGridView1)
+
+            ' Check if the DataTable is not null
+            If dt IsNot Nothing Then
+                ' Use a list to store rows to delete (to avoid modifying the collection while iterating)
+                Dim rowsToDelete As New List(Of DataRow)()
+
+                ' Iterate through the rows of the DataTable
+                For Each row As DataRow In dt.Rows
+                    ' Combine the Date and Time columns into a DateTime object
+                    Dim rowDate As DateTime = CType(row("Date"), DateTime)
+                    ' Extract hours and minutes
+                    Dim hours As Integer = Integer.Parse(row("Time").Substring(0, 2)) ' First 2 characters are hours
+                    Dim minutes As Integer = Integer.Parse(row("Time").Substring(2, 2)) ' Last 2 characters are minutes
+                    Dim rowTime = New TimeSpan(hours, minutes, 0)
+
+                    Dim rowDateTime As DateTime = rowDate.Add(rowTime)
+
+                    ' Check if the row is older than the cutoff
+                    If rowDateTime < cutoffDateTime Then
+                        rowsToDelete.Add(row)
+                    End If
+                Next
+
+                ' Remove the rows from the DataTable
+                For Each rowToDelete As DataRow In rowsToDelete
+                    dt.Rows.Remove(rowToDelete)
+                Next
+
+                ' Refresh the DataGridView
+                DataGridView1.Refresh()
+            End If
+        End If
     End Sub
     ''' <summary>
     ''' Creates and returns a DataTable containing the structure and columns required for displaying DX cluster data.
@@ -394,7 +816,7 @@ Public Class frmCluster
         ' Spotter Grid Square
         ' Spotter's IP Address(CC Cluster only)
 
-        Dim table As New DataTable(), ColumnHeadings() As String = {"CC11", "Frequency", "DX Call", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid", "Band"}
+        Dim table As New DataTable(), ColumnHeadings() As String = {"CC11", "Frequency", "DX Call", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid", "Band", "Mode"}
 
         ' Add column headings
         For i As Integer = 0 To ColumnHeadings.Length - 1
@@ -405,92 +827,10 @@ Public Class frmCluster
 
         Return table
     End Function
-    ''' <summary>
-    ''' Safely appends text to a TextBox control from any thread.
-    ''' Ensures thread-safe updates to the TextBox by invoking the update on the UI thread if necessary.
-    ''' </summary>
-    ''' <param name="text">The text to append to the TextBox.</param>
-    ''' <remarks>
-    ''' This method is useful in scenarios where background threads (e.g., a BackgroundWorker) 
-    ''' need to update the UI, which is not thread-safe by default.
-    ''' It also limits the number of lines in the TextBox to a maximum of 50, 
-    ''' removing older lines to maintain performance and readability.
-    ''' </remarks>
-    Private Sub AppendTextSafe(text As String)
-        Try
-            If TextBox1.InvokeRequired Then
-                TextBox1.Invoke(New Action(Of String)(AddressOf AppendTextSafe), text)
-                Return
-            End If
+#End Region
 
-            ' Append the new text
-            TextBox1.AppendText(text)
-
-            Const maxLines As Integer = 50  ' Limit the number of lines to 50
-            Dim lines As String() = TextBox1.Lines
-            If lines.Length > maxLines Then
-                TextBox1.Lines = lines.Skip(lines.Length - maxLines).ToArray()
-            End If
-            ' Scroll to the last line
-            TextBox1.SelectionStart = TextBox1.Text.Length
-            TextBox1.ScrollToCaret()
-        Catch ex As Exception
-            Debug.WriteLine($"Error in AppendTextSafe: {ex.Message}")
-        End Try
-    End Sub
-    ''' <summary>
-    ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
-    ''' This DataTable is used as the data source for a ComboBox to allow users to select a TimeSpan.
-    ''' </summary>
-    ''' <returns>
-    ''' A DataTable with two columns:
-    ''' - "Description": A string describing the TimeSpan (e.g., "15 Mins", "1 hr").
-    ''' - "TimeSpanValue": The corresponding TimeSpan value (e.g., TimeSpan.FromMinutes(15)).
-    ''' </returns>
-    ''' <remarks>
-    ''' The method populates the DataTable with a set of predefined TimeSpan values, such as 15 minutes, 
-    ''' 30 minutes, 1 hour, etc. This is typically used to provide a dropdown list of time intervals 
-    ''' for filtering or other time-based operations.
-    ''' </remarks>
-    Private Function GetTimeSpanDataSource() As DataTable
-        Dim table As New DataTable()
-        table.Columns.Add("Description", GetType(String)) ' Column for the label
-        table.Columns.Add("TimeSpanValue", GetType(TimeSpan)) ' Column for the TimeSpan value
-
-        ' Add selectable TimeSpan values
-        table.Rows.Add("15 mins", TimeSpan.FromMinutes(15))
-        table.Rows.Add("30 mins", TimeSpan.FromMinutes(30))
-        table.Rows.Add("1 hr", TimeSpan.FromHours(1))
-        table.Rows.Add("3 hrs", TimeSpan.FromHours(3))
-        table.Rows.Add("6 hrs", TimeSpan.FromHours(6))
-        Return table
-    End Function
-    ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
-    ''' This DataTable is used as the data source for a ComboBox to allow users to select an update interval.
-    ''' </summary>
-    ''' <returns>
-    ''' A DataTable with two columns:
-    ''' - "Description": A string describing the TimeSpan (e.g., "20 secs", "1 min").
-    ''' - "TimeSpanValue": The corresponding TimeSpan value (e.g., TimeSpan.FromSeconds(20)).
-    ''' </returns>
-    ''' <remarks>
-    ''' The method populates the DataTable with a set of predefined TimeSpan values, such as 20 seconds, 
-    ''' 1 minute, 5 minutes, etc. This is typically used to provide a dropdown list of update intervals 
-    ''' for refreshing or polling operations.
-    ''' </remarks>
-    Private Function GetUpdateSpanDataSource() As DataTable
-        Dim table As New DataTable()
-        table.Columns.Add("Description", GetType(String)) ' Column for the label
-        table.Columns.Add("TimeSpanValue", GetType(TimeSpan)) ' Column for the TimeSpan value
-
-        ' Add selectable TimeSpan values
-        table.Rows.Add("20 secs", TimeSpan.FromSeconds(20))
-        table.Rows.Add("1 min", TimeSpan.FromMinutes(1))
-        table.Rows.Add("5 mins", TimeSpan.FromMinutes(5))
-        table.Rows.Add("10 mins", TimeSpan.FromMinutes(10))
-        table.Rows.Add("1 hr", TimeSpan.FromHours(1))
-        Return table
-    End Function
+#Region "ComboBox Helpers"
+    ' Methods related to ComboBox
     ''' <summary>
     ''' Binds a ComboBox to a DataTable containing TimeSpan values and their descriptions.
     ''' The ComboBox displays the descriptions and stores the corresponding TimeSpan values.
@@ -507,85 +847,75 @@ Public Class frmCluster
     ''' </remarks>
     Private Sub BindTimeSpanComboBox(cmb As ComboBox, GetDataSource As Func(Of DataTable))
         Dim timeSpanDataSource As DataTable = GetDataSource()
-        cmb.DataSource = timeSpanDataSource
-        cmb.DisplayMember = "Description" ' Display the description in the dropdown
-        cmb.ValueMember = "TimeSpanValue" ' Store the TimeSpan value
+        With cmb
+            .DataSource = timeSpanDataSource
+            .DisplayMember = "Description" ' Display the description in the dropdown
+            .ValueMember = "TimeSpanValue" ' Store the TimeSpan value
+        End With
     End Sub
+    ''' <summary>
+    ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
+    ''' This DataTable is used as the data source for a ComboBox to allow users to select a TimeSpan.
+    ''' </summary>
+    ''' <returns>
+    ''' A DataTable with two columns:
+    ''' - "Description": A string describing the TimeSpan (e.g., "15 Mins", "1 hr").
+    ''' - "TimeSpanValue": The corresponding TimeSpan value (e.g., TimeSpan.FromMinutes(15)).
+    ''' </returns>
+    ''' <remarks>
+    ''' The method populates the DataTable with a set of predefined TimeSpan values, such as 15 minutes, 
+    ''' 30 minutes, 1 hour, etc. This is typically used to provide a dropdown list of time intervals 
+    ''' for filtering or other time-based operations.
+    ''' </remarks>
+    Private Function GetAgeSpanDataSource() As DataTable
+        Dim table As New DataTable()
+        With table
+            .Columns.Add("Description", GetType(String)) ' Column for the label
+            .Columns.Add("TimeSpanValue", GetType(TimeSpan)) ' Column for the TimeSpan value
+
+            ' Add selectable TimeSpan values
+            .Rows.Add("15 mins", TimeSpan.FromMinutes(15))
+            .Rows.Add("30 mins", TimeSpan.FromMinutes(30))
+            .Rows.Add("1 hr", TimeSpan.FromHours(1))
+            .Rows.Add("3 hrs", TimeSpan.FromHours(3))
+            .Rows.Add("6 hrs", TimeSpan.FromHours(6))
+        End With
+        Return table
+    End Function
+    ''' <summary>
+    ''' Handles the SelectedIndexChanged event for ComboBox1.
+    ''' Updates the application settings and applies an age filter to the DataGridView
+    ''' based on the selected value in ComboBox1.
+    ''' </summary>
+    ''' <param name="sender">The ComboBox control that triggered the event.</param>
+    ''' <param name="e">Provides data for the event.</param>
+    ''' <remarks>
+    ''' Key functionality:
+    ''' 1. Saves the selected value from ComboBox1 to the application settings (My.Settings.Age).
+    ''' 2. Calls the ApplyAgeFilter method to filter the DataGridView rows based on the selected age.
+    ''' This ensures that only rows within the specified age range are displayed.
+    ''' </remarks>
     Private Sub ComboBox1_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox1.SelectedIndexChanged
+        My.Settings.Age = CType(sender, ComboBox).Text ' Save the selected value to settings
+        My.Settings.Save()
         ApplyAgeFilter(sender)
     End Sub
     ''' <summary>
-    ''' Filters the rows in the DataGridView's underlying DataTable based on the selected TimeSpan from the ComboBox.
-    ''' Removes rows where the combined Date and Time values are older than the calculated cutoff DateTime.
+    ''' Handles the SelectedIndexChanged event for ComboBox2.
+    ''' Updates the application settings and adjusts the polling interval for the DX cluster server
+    ''' based on the selected value in ComboBox2.
     ''' </summary>
-    ''' <param name="sender">The control that triggered the method, expected to be ComboBox1.</param>
+    ''' <param name="sender">The ComboBox control that triggered the event.</param>
+    ''' <param name="e">Provides data for the event.</param>
     ''' <remarks>
-    ''' This method is triggered by the ComboBox1.SelectedIndexChanged event or can be called explicitly.
-    ''' It calculates a cutoff DateTime by subtracting the selected TimeSpan from the current UTC time.
-    ''' Rows in the DataTable with a DateTime older than the cutoff are removed, and the DataGridView is refreshed.
+    ''' Key functionality:
+    ''' 1. Saves the selected value from ComboBox2 to the application settings (My.Settings.Update).
+    ''' 2. Calls the ApplyUpdateInterval method to update the PollingTimer's interval and trigger an immediate poll.
+    ''' This ensures that the polling interval is dynamically adjusted based on the user's selection.
     ''' </remarks>
-    Private Sub ApplyAgeFilter(sender As Object)
-        ' Ensure cross-thread protection for ComboBox1
-        If sender.InvokeRequired Then
-            sender.Invoke(New Action(Of Object)(AddressOf ApplyAgeFilter), sender)
-            Return
-        End If
-        ' Check if the sender is a ComboBox and has a selected value
-        Dim selectedTimeSpan As TimeSpan
-        Dim cmb As ComboBox = CType(sender, ComboBox)
-        If cmb.SelectedValue IsNot Nothing Then
-            ' Handle the case where SelectedValue is a DataRowView
-            If TypeOf cmb.SelectedValue Is TimeSpan Then
-                selectedTimeSpan = CType(cmb.SelectedValue, TimeSpan)
-            ElseIf TypeOf cmb.SelectedItem Is DataRowView Then
-                Dim rowView As DataRowView = CType(cmb.SelectedItem, DataRowView)
-                selectedTimeSpan = CType(rowView("TimeSpanValue"), TimeSpan)
-            Else
-                AppendTextSafe("Error: Unable to extract TimeSpan from SelectedValue." & vbCrLf)
-                Return
-            End If
-            ' Delete any spots older than age
-
-            ' Calculate the cutoff DateTime
-            Dim cutoffDateTime As DateTime = DateTime.UtcNow.Subtract(selectedTimeSpan)
-
-            ' Get the DataTable from the DataGridView's DataSource
-            Dim dt As DataTable = CType(DataGridView1.DataSource, DataTable)
-
-            ' Check if the DataTable is not null
-            If dt IsNot Nothing Then
-                ' Use a list to store rows to delete (to avoid modifying the collection while iterating)
-                Dim rowsToDelete As New List(Of DataRow)()
-
-                ' Iterate through the rows of the DataTable
-                For Each row As DataRow In dt.Rows
-                    ' Combine the Date and Time columns into a DateTime object
-                    Dim rowDate As DateTime = CType(row("Date"), DateTime)
-                    ' Extract hours and minutes
-                    Dim hours As Integer = Integer.Parse(row("Time").Substring(0, 2)) ' First 2 characters are hours
-                    Dim minutes As Integer = Integer.Parse(row("Time").Substring(2, 2)) ' Last 2 characters are minutes
-                    Dim rowTime = New TimeSpan(hours, minutes, 0)
-
-                    Dim rowDateTime As DateTime = rowDate.Add(rowTime)
-
-                    ' Check if the row is older than the cutoff
-                    If rowDateTime < cutoffDateTime Then
-                        rowsToDelete.Add(row)
-                    End If
-                Next
-
-                ' Remove the rows from the DataTable
-                For Each rowToDelete As DataRow In rowsToDelete
-                    dt.Rows.Remove(rowToDelete)
-                Next
-
-                ' Refresh the DataGridView
-                DataGridView1.Refresh()
-            End If
-        End If
-    End Sub
-
     Private Sub ComboBox2_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox2.SelectedIndexChanged
+        My.Settings.Update = CType(sender, ComboBox).Text ' Save the selected value to settings
+        My.Settings.Save()
         ApplyUpdateInterval(sender)
     End Sub
     ''' <summary>
@@ -599,96 +929,218 @@ Public Class frmCluster
     ''' Additionally, it triggers an immediate poll of the cluster to reflect the new interval change.
     ''' The method ensures thread safety by invoking itself on the UI thread if necessary.
     ''' </remarks>
-    Sub ApplyUpdateInterval(sender As Object)
+    Public Sub ApplyUpdateInterval(sender As Object)
         ' Ensure cross-thread protection
         If ComboBox2.InvokeRequired Then
             ComboBox2.Invoke(New Action(Of Object)(AddressOf ApplyUpdateInterval), sender)
             Return
         End If
 
-        ' Retrieve the selected TimeSpan from ComboBox2
-        Dim selectedTimeSpan As TimeSpan
-        If ComboBox2.SelectedValue IsNot Nothing Then
-            If TypeOf ComboBox2.SelectedValue Is TimeSpan Then
-                selectedTimeSpan = CType(ComboBox2.SelectedValue, TimeSpan)
-            ElseIf TypeOf ComboBox2.SelectedItem Is DataRowView Then
-                Dim rowView As DataRowView = CType(ComboBox2.SelectedItem, DataRowView)
-                selectedTimeSpan = CType(rowView("TimeSpanValue"), TimeSpan)
-            Else
-                AppendTextSafe("Error: Unable to extract TimeSpan from ComboBox2.SelectedValue." & vbCrLf)
-                Return
-            End If
-        Else
-            AppendTextSafe("Error: No value selected in ComboBox2." & vbCrLf)
-            Return
-        End If
+        InvokeIfRequired(ComboBox2, AddressOf SetPollingInterval)
         PollCluster()       ' poll cluster when update interval is changed
-        PollingTimer.Interval = selectedTimeSpan.TotalMilliseconds  ' Update the timer interval
     End Sub
+#End Region
+
+#Region "Event Handlers"
+    ' Methods related to Events
+#End Region
+
+#Region "Initialization"
+    ' Methods related to Initialization
+
     ''' <summary>
-    ''' Handles the RowPrePaint event for DataGridView1.
-    ''' Dynamically highlights rows in the DataGridView based on whether a matching 
-    ''' callsign and band exist in the WSI dialog's DataGridView.
+    ''' Handles the Load event for the frmCluster form.
+    ''' Initializes the form's controls, sets up the DataGridView, configures ComboBoxes, 
+    ''' dynamically adds checkboxes for amateur bands, and establishes a connection to the DX cluster server.
     ''' </summary>
-    ''' <param name="sender">The DataGridView that triggered the event.</param>
-    ''' <param name="e">Provides data for the RowPrePaint event.</param>
+    ''' <param name="sender">The source of the event, typically the frmCluster form.</param>
+    ''' <param name="e">The EventArgs containing event data.</param>
     ''' <remarks>
     ''' This method performs the following actions:
-    ''' - Retrieves the current row being painted.
-    ''' - Extracts the "DX Call" and "Band" values from the row.
-    ''' - Checks for a matching entry in the WSI dialog's DataGridView using the extracted values.
-    ''' - If the WSI dialog contains a DataGridView with a matching "Band" column, the row's background 
-    '''   is reset to white, indicating a previous contact on this band.
-    ''' - If no matching "Band" column is found, the row is highlighted with a green background, 
-    '''   indicating no previous contact on this band.
-    ''' - Throws an exception if the DataGridView1 control cannot be located in the WSI dialog.
+    ''' - Configures the DataGridView (DataGridView1) with a data source, column visibility, sorting, and display order.
+    ''' - Retrieves and applies amateur band settings to dynamically created checkboxes.
+    ''' - Configures ComboBoxes (ComboBox1 and ComboBox2) for age filtering and update intervals.
+    ''' - Establishes a TCP connection to the DX cluster server and starts a BackgroundWorker for asynchronous communication.
+    ''' - Ensures the user is logged in before proceeding with further operations.
+    ''' - Sets up a polling timer to periodically poll the DX cluster server.
     ''' </remarks>
+    Private Async Sub frmCluster_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+        ' Create data source
 
-    Private Sub DataGridView1_RowPrePaint(sender As Object, e As DataGridViewRowPrePaintEventArgs) Handles DataGridView1.RowPrePaint
-        Dim dgv As DataGridView = CType(sender, DataGridView)
-        ' Get the current row
-        Dim row As DataGridViewRow = dgv.Rows(e.RowIndex)
-        If Form1.OpenWSIDialogs IsNot Nothing Then
-            Dim wsiDialog = Form1.OpenWSIDialogs(row.Cells("DX Call").Value)    ' get WSI dialog for this call
-            If wsiDialog IsNot Nothing Then
-                Dim dgv1 = CType(FindControlRecursive(wsiDialog.Controls(0), "DataGridView1"), DataGridView)    ' find the DataGridView control
-                If dgv1 Is Nothing Then
-                    Throw New Exception($"Could not locate DataGridView1 in {wsiDialog.Name}")
-                Else
-                    If dgv1.DataSource IsNot Nothing Then
-                        ' Get the DataTable from wsi form DataGridView1.DataSource
-                        Dim dt As DataTable = TryCast(dgv1.DataSource, DataTable)
-                        ' Check for any value (W, C, CL) in band column, i.e. column exists
-                        If dt.Columns.Contains($"BAND_{row.Cells("Band").Value}") Then
-                            ' Reset the background color if previous contact on this band
-                            row.DefaultCellStyle.BackColor = Color.White
-                        Else
-                            ' Highlight the row if no contact on this band
-                            row.DefaultCellStyle.BackColor = Color.LightGreen
-                        End If
-                    End If
-                End If
-            End If
+        Dim DisplayOrder() As String = {"CC11", "DX Call", "Frequency", "Band", "Mode", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid"}    ' the order the columns are displayed
+        With DataGridView1
+            .AutoGenerateColumns = True
+            .RowHeadersVisible = False      ' hide the Select column
+            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
+            .DataSource = GetDataSource()   ' Bind the data source
+            ' Hide uninteresting columns
+            .Columns("CC11").Visible = False
+            .Columns("Entity").Visible = False
+            .Columns("Spotter DXCC").Visible = False
+            .Columns("Spotter Node").Visible = False
+            .Columns("ITU DX").Visible = False
+            .Columns("CQ DX").Visible = False
+            .Columns("ITU Spotter").Visible = False
+            .Columns("CQ Spotter").Visible = False
+            .Columns("Spotter State").Visible = False
+            .Columns("DX State").Visible = False
+            .Columns("Spotter Country").Visible = False
+            .Columns("Spotter Grid").Visible = False
+            .Sort(DataGridView1.Columns("Date"), ListSortDirection.Descending)
+            .Sort(DataGridView1.Columns("Time"), ListSortDirection.Descending)
+            .ColumnHeadersDefaultCellStyle.Font = New Font(DataGridView1.Font, FontStyle.Bold) ' Make the header row bold
+            .Columns("Date").DefaultCellStyle.Format = "dd-MMM"
+            ' Apply the display order
+            If DisplayOrder.Length <> .DataSource.columns.count Then Throw New Exception("There needs to be 1 entry in DisplayOrder for every column in the datasource")
+            For i As Integer = 0 To DisplayOrder.Length - 1
+                .Columns(DisplayOrder(i)).DisplayIndex = i
+            Next
+            .Refresh()
+        End With
+
+        GetOpenWSIDialogs() ' get list of open WSI dialogs
+
+        PollingTimer = New Timers.Timer With {
+            .AutoReset = True ' Ensure the timer repeats
+            }
+        AddHandler PollingTimer.Elapsed, AddressOf OnPollingTimerElapsed
+
+        ' Temporarily remove the event handlers
+        RemoveHandler ComboBox1.SelectedIndexChanged, AddressOf ComboBox1_SelectedIndexChanged
+        RemoveHandler ComboBox2.SelectedIndexChanged, AddressOf ComboBox2_SelectedIndexChanged
+        ' Create the Age drop down
+        BindTimeSpanComboBox(ComboBox1, AddressOf GetAgeSpanDataSource)
+        ' Set the default value for ComboBox1
+        Dim valueToSelect As String = My.Settings.Age
+        Dim Index As Integer = ComboBox1.FindStringExact(valueToSelect)
+        If Index >= 0 Then
+            ComboBox1.SelectedIndex = Index
+        Else
+            Throw New Exception($"Value '{valueToSelect}' not found in ComboBox1.")
         End If
+
+        ' Create the Update drop down
+        BindTimeSpanComboBox(ComboBox2, AddressOf GetUpdateSpanDataSource)
+        ' Set the default value for ComboBox2
+        valueToSelect = My.Settings.Update
+        Index = ComboBox2.FindStringExact(valueToSelect)
+        If Index >= 0 Then
+            ComboBox2.SelectedIndex = Index
+        Else
+            Throw New Exception($"Value '{valueToSelect}' not found in ComboBox2.")
+        End If
+        ' Reattach the event handlers
+        AddHandler ComboBox1.SelectedIndexChanged, AddressOf ComboBox1_SelectedIndexChanged
+        AddHandler ComboBox2.SelectedIndexChanged, AddressOf ComboBox2_SelectedIndexChanged
+
+        AddBandCheckboxes()
+        Dim SelectedBands = GetAmateurBandSettings() ' get the amateur band settings
+        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
+        ' Set the Checked property of each CheckBox based on the selected bands
+        For Each checkBox In groupBox.Controls.OfType(Of CheckBox)()
+            checkBox.Checked = SelectedBands.Contains(checkBox.Name) ' check the boxes for the selected bands
+        Next
+
+        ' Connect to the DX cluster server
+        Cluster.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, True)
+        Await Cluster.ConnectAsync(DXcluster, port).ConfigureAwait(False)
+        ' Ensure the connection is fully established
+        Thread.Sleep(1000)      ' wait for connection
+        If Not Cluster.Connected Then
+            AppendTextSafe("Error: Unable to connect to the cluster server." & vbCrLf)
+            Return
+        End If
+        ' Configure and start the BackgroundWorker
+        With Bgw
+            .WorkerSupportsCancellation = True
+            .WorkerReportsProgress = True
+            .RunWorkerAsync()
+        End With
+
+        ' Wait until the user is logged in
+        While Not LoggedIn
+            Await Task.Delay(100) ' Check every 100ms
+        End While
     End Sub
     ''' <summary>
-    ''' Recursively searches for a control with the specified name within a parent control's hierarchy.
+    ''' Dynamically adds a group of checkboxes to the form, one for each amateur radio band.
     ''' </summary>
-    ''' <param name="parent">The parent control to start the search from.</param>
-    ''' <param name="name">The name of the control to search for.</param>
-    ''' <returns>
-    ''' The control with the specified name if found; otherwise, Nothing.
-    ''' </returns>
     ''' <remarks>
-    ''' This method is useful for locating controls that may be nested within containers 
-    ''' (e.g., Panels, GroupBoxes) and are not directly accessible from the top-level Controls collection.
+    ''' - A GroupBox is created to visually group the checkboxes.
+    ''' - Each checkbox represents an amateur band, with its text set to the band name.
+    ''' - The checkboxes are arranged vertically within the GroupBox.
+    ''' - The GroupBox is added to the form at a specified location.
+    ''' - The method uses the distinct values from the FrequencyBands dictionary to generate the checkboxes.
     ''' </remarks>
-    Private Function FindControlRecursive(parent As Control, name As String) As Control
-        For Each ctrl As Control In parent.Controls
-            If ctrl.Name = name Then Return ctrl
-            Dim found = FindControlRecursive(ctrl, name)
-            If found IsNot Nothing Then Return found
+    Private Sub AddBandCheckboxes()
+        ' Create a GroupBox to hold the checkboxes
+        ' Calculate location for groupbox, just below the Update interval
+        Dim location = Me.ComboBox2.Location
+        location.Y += 40
+        ' Create groupbox
+        Dim groupBox As New GroupBox With {
+        .Text = AmateurBandsGroupBoxText,
+        .Location = location,
+        .AutoSize = True,
+        .Margin = New Padding(10)
+    }
+
+        ' Add the GroupBox to the form
+        Me.Controls.Add(groupBox)
+
+        ' Dynamically create checkboxes for each band
+        Dim xOffset As Integer = 10 ' Initial horizontal offset
+        Dim yOffset As Integer = 20 ' Initial vertical offset
+        Dim columnWidth As Integer = 60 ' Width of each column
+        Dim maxRows As Integer = Math.Ceiling(FrequencyBands.Values.Distinct().Count() / 2.0) ' Max rows per column
+        Dim currentRow As Integer = 0 ' Track the current row
+
+        For Each band In FrequencyBands.Values.Distinct()
+            ' Create a new checkbox
+            Dim checkBox As New CheckBox With {
+            .Text = band,
+            .Name = band, ' Set the checkbox's name to the band name for easy identification
+            .Location = New Point(xOffset, yOffset),
+            .AutoSize = True,
+            .Checked = True
+        }
+
+            ' Attach the CheckedChanged event to save settings
+            AddHandler checkBox.CheckedChanged, Sub(sender, e) UpdateDataGridViewFilter()
+
+            ' Add the checkbox to the GroupBox
+            groupBox.Controls.Add(checkBox)
+
+            ' Update the position for the next checkbox
+            currentRow += 1
+            If currentRow >= maxRows Then
+                ' Move to the next column
+                currentRow = 0
+                xOffset += columnWidth
+                yOffset = 20 ' Reset vertical offset for the new column
+            Else
+                ' Move to the next row in the current column
+                yOffset += 25
+            End If
         Next
-        Return Nothing
+    End Sub
+    ''' <summary>
+    ''' Reads the amateur band settings from My.Settings and returns a list of selected bands.
+    ''' </summary>
+    ''' <returns>A list of strings representing the selected amateur bands.</returns>
+    Private Function GetAmateurBandSettings() As List(Of String)
+        ' Check if the setting exists and is not empty
+        If Not String.IsNullOrEmpty(My.Settings.AmateurBands) Then
+            ' Split the comma-separated string into a list of bands
+            Return My.Settings.AmateurBands.Split(","c).Select(Function(b) b.Trim()).ToList()
+        End If
+
+        ' Return an empty list if no settings are found
+        Return New List(Of String)()
     End Function
+
+    Private Sub btnClose_Click(sender As Object, e As EventArgs) Handles btnClose.Click
+        Me.Close() ' Closes the form
+    End Sub
+#End Region
 End Class
