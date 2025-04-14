@@ -126,7 +126,7 @@ Public Class WSI
                     Dim QSL As String = "W"     ' worked
                     If sqldr("Confirmed") > 0 Then
                         QSL = "C"    ' confirmed
-                    ElseIf clublog.Any(Function(t) t.band = band And t.mode = mode) Then
+                    ElseIf clublog.Any(Function(t) t.band = band AndAlso t.mode = mode) Then
                         QSL = "CL" ' Clublog match
                     End If
                     row(ColumnName) = QSL
@@ -172,41 +172,6 @@ Public Class WSI
             .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
             .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
         End With
-
-        ' Populate DataTable for DataGridView2
-        ' Get clublog matches
-        Using httpClient As New HttpClient()
-            Try
-                Dim GETfields As New Dictionary(Of String, String) From {
-                            {"api", CLUBLOG_API_KEY},
-                            {"call", "vk3ohm"},
-                            {"log", $"{Me.Text}"}
-                    }
-                httpClient.Timeout = New TimeSpan(0, 5, 0)        ' 5 min timeout
-                httpClient.DefaultRequestHeaders.Clear()
-                Try
-                    ' Get JSON from clublog, and decode
-                    Dim url As New Uri(QueryHelpers.AddQueryString("https://clublog.org/logsearchjson.php", GETfields))
-                    ClublogJSON = Await httpClient.GetFromJsonAsync(url, ClublogJSON.GetType)
-                    ' valid json
-                    For Each bnd In ClublogJSON
-                        band = $"{bnd.Key}m"
-                        For Each md In bnd.Value
-                            Select Case md.Key
-                                Case "P" : mode = "Phone"
-                                Case "D" : mode = "Digital"
-                                Case "C" : mode = "CW"
-                            End Select
-                            clublog.Add((band, mode))
-                        Next
-                    Next
-                Catch ex As Exception
-                    ' Just ignore if error
-                End Try
-            Catch ex As HttpRequestException
-                MsgBox(ex.Message & vbCrLf & ex.StackTrace, vbCritical + vbOKOnly, "Exception")
-            End Try
-        End Using
 
         ' Populate DataTable for DataGridView2
         Using cmd As New MySqlCommand()
@@ -263,7 +228,31 @@ Public Class WSI
             sqldr.Close()
         End Using
 
-        ' Bind DataTable to DataGridView1
+        If DXCC = 0 Then
+            ' no DXCC available. Get DXCC from clublog
+            Using httpClient As New HttpClient()
+                Try
+                    Dim GETfields As New Dictionary(Of String, String) From {
+                            {"call", $"{Me.Text}"},
+                            {"api", CLUBLOG_API_KEY},
+                            {"full", 1}
+                    }
+                    httpClient.Timeout = New TimeSpan(0, 5, 0)        ' 5 min timeout
+                    httpClient.DefaultRequestHeaders.Clear()
+                    Dim url As New Uri(QueryHelpers.AddQueryString("https://clublog.org/dxcc", GETfields))
+                    Dim httpResult = Await httpClient.GetAsync(url)
+                    httpResult.EnsureSuccessStatusCode()
+                    Dim response = Await httpResult.Content.ReadAsStringAsync()
+                    Dim cl As JsonDocument = JsonDocument.Parse(response)
+                    DXCC = cl.RootElement.GetProperty("DXCC").GetUInt32
+                    Country = cl.RootElement.GetProperty("Name").GetString
+                Catch ex As HttpRequestException
+                    MsgBox(ex.Message & vbCrLf & ex.StackTrace, vbCritical + vbOKOnly, "Exception")
+                End Try
+            End Using
+        End If
+
+        ' Bind DataTable to DataGridView2
         DataGridView2.DataSource = dt2
         FormatDataGridView(DataGridView2)
 
@@ -300,8 +289,6 @@ Public Class WSI
             .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.None) + .RowHeadersWidth + 2
             .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 2
         End With
-
-
 
         ' ******************************** original code
         ' Second do the WSI for the nominated DXCC
@@ -542,3 +529,5 @@ Public Class WSI
         End If
     End Sub
 End Class
+
+

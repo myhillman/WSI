@@ -2,6 +2,7 @@
 Imports System.Net
 Imports System.Threading
 Imports System.ComponentModel
+Imports System.Windows.Forms.VisualStyles.VisualStyleElement.Rebar
 
 Public Class frmCluster
     ' Constants for the DX cluster server and port
@@ -208,8 +209,13 @@ Public Class frmCluster
             ' Send the sh/dx command
             Await SendClusterAsync($"sh/dx {callsign}{vbCrLf}")
         Next
+
+        ' get the open WSI dialogs for highlighting of the DataGridView
+        Form1.OpenWSIDialogs = GetOpenWSIDialogs()
+
         ' Apply the age filter
         ApplyAgeFilter(ComboBox1)
+
     End Sub
     Private Sub ProcessMessage(message As String)
         ' Log the message to TextBox1
@@ -286,6 +292,26 @@ Public Class frmCluster
             End If
         Next
         Return "Unknown"
+    End Function
+    ''' <summary>
+    ''' Retrieves a dictionary of open WSI dialog forms.
+    ''' </summary>
+    ''' <returns>
+    ''' A dictionary where the key is the name of the form and the value is the WSI form instance.
+    ''' </returns>
+    ''' <remarks>
+    ''' This method iterates through all open forms in the application and filters out those of type WSI.
+    ''' It is useful for managing and interacting with multiple WSI dialog instances.
+    ''' </remarks>
+    Public Shared Function GetOpenWSIDialogs() As Dictionary(Of String, Form)
+        Dim wsiDialogs As New Dictionary(Of String, Form)
+        For Each frm As Form In Application.OpenForms
+            If TypeOf frm Is WSI Then
+                Dim t = frm.Text
+                wsiDialogs.Add(frm.Text, CType(frm, WSI))
+            End If
+        Next
+        Return wsiDialogs
     End Function
 
     ''' <summary>
@@ -599,47 +625,70 @@ Public Class frmCluster
         PollCluster()       ' poll cluster when update interval is changed
         PollingTimer.Interval = selectedTimeSpan.TotalMilliseconds  ' Update the timer interval
     End Sub
+    ''' <summary>
+    ''' Handles the RowPrePaint event for DataGridView1.
+    ''' Dynamically highlights rows in the DataGridView based on whether a matching 
+    ''' callsign and band exist in the WSI dialog's DataGridView.
+    ''' </summary>
+    ''' <param name="sender">The DataGridView that triggered the event.</param>
+    ''' <param name="e">Provides data for the RowPrePaint event.</param>
+    ''' <remarks>
+    ''' This method performs the following actions:
+    ''' - Retrieves the current row being painted.
+    ''' - Extracts the "DX Call" and "Band" values from the row.
+    ''' - Checks for a matching entry in the WSI dialog's DataGridView using the extracted values.
+    ''' - If the WSI dialog contains a DataGridView with a matching "Band" column, the row's background 
+    '''   is reset to white, indicating a previous contact on this band.
+    ''' - If no matching "Band" column is found, the row is highlighted with a green background, 
+    '''   indicating no previous contact on this band.
+    ''' - Throws an exception if the DataGridView1 control cannot be located in the WSI dialog.
+    ''' </remarks>
+
     Private Sub DataGridView1_RowPrePaint(sender As Object, e As DataGridViewRowPrePaintEventArgs) Handles DataGridView1.RowPrePaint
         Dim dgv As DataGridView = CType(sender, DataGridView)
-        Dim OpenWSIDialogs As Dictionary(Of String, Form) = GetOpenWSiDialogs
         ' Get the current row
         Dim row As DataGridViewRow = dgv.Rows(e.RowIndex)
-
-        ' Apply background color based on band
-        Select Case row.Cells("Band").Value
-            Case "80m"
-                row.DefaultCellStyle.BackColor = Color.LightPink ' Example: 80m band
-            Case "40m"
-                row.DefaultCellStyle.BackColor = Color.LightGreen ' Example: 40m band
-            Case "20m"
-                row.DefaultCellStyle.BackColor = Color.LightBlue ' Example: 20m band
-            Case "15m"
-                row.DefaultCellStyle.BackColor = Color.LightYellow ' Example: 15m band
-            Case "12m"
-                row.DefaultCellStyle.BackColor = Color.LightCyan ' Example: 12m band
-            Case "10m"
-                row.DefaultCellStyle.BackColor = Color.LightCoral ' Example: 10m band
-            Case Else
-                row.DefaultCellStyle.BackColor = Color.White ' Default color
-        End Select
+        If Form1.OpenWSIDialogs IsNot Nothing Then
+            Dim wsiDialog = Form1.OpenWSIDialogs(row.Cells("DX Call").Value)    ' get WSI dialog for this call
+            If wsiDialog IsNot Nothing Then
+                Dim dgv1 = CType(FindControlRecursive(wsiDialog.Controls(0), "DataGridView1"), DataGridView)    ' find the DataGridView control
+                If dgv1 Is Nothing Then
+                    Throw New Exception($"Could not locate DataGridView1 in {wsiDialog.Name}")
+                Else
+                    If dgv1.DataSource IsNot Nothing Then
+                        ' Get the DataTable from wsi form DataGridView1.DataSource
+                        Dim dt As DataTable = TryCast(dgv1.DataSource, DataTable)
+                        ' Check for any value (W, C, CL) in band column, i.e. column exists
+                        If dt.Columns.Contains($"BAND_{row.Cells("Band").Value}") Then
+                            ' Reset the background color if previous contact on this band
+                            row.DefaultCellStyle.BackColor = Color.White
+                        Else
+                            ' Highlight the row if no contact on this band
+                            row.DefaultCellStyle.BackColor = Color.LightGreen
+                        End If
+                    End If
+                End If
+            End If
+        End If
     End Sub
     ''' <summary>
-    ''' Retrieves a dictionary of open WSI dialog forms.
+    ''' Recursively searches for a control with the specified name within a parent control's hierarchy.
     ''' </summary>
+    ''' <param name="parent">The parent control to start the search from.</param>
+    ''' <param name="name">The name of the control to search for.</param>
     ''' <returns>
-    ''' A dictionary where the key is the name of the form and the value is the WSI form instance.
+    ''' The control with the specified name if found; otherwise, Nothing.
     ''' </returns>
     ''' <remarks>
-    ''' This method iterates through all open forms in the application and filters out those of type WSI.
-    ''' It is useful for managing and interacting with multiple WSI dialog instances.
+    ''' This method is useful for locating controls that may be nested within containers 
+    ''' (e.g., Panels, GroupBoxes) and are not directly accessible from the top-level Controls collection.
     ''' </remarks>
-    Private Function GetOpenWSIDialogs() As Dictionary(Of String, Form)
-        Dim wsiDialogs As New Dictionary(Of String, Form)
-        For Each frm As Form In Application.OpenForms
-            If TypeOf frm Is WSI Then
-                wsiDialogs.Add(frm.Text, CType(frm, WSI))
-            End If
+    Private Function FindControlRecursive(parent As Control, name As String) As Control
+        For Each ctrl As Control In parent.Controls
+            If ctrl.Name = name Then Return ctrl
+            Dim found = FindControlRecursive(ctrl, name)
+            If found IsNot Nothing Then Return found
         Next
-        Return wsiDialogs
+        Return Nothing
     End Function
 End Class
