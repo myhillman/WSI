@@ -113,6 +113,18 @@ Namespace My
                 Me("Update") = value
             End Set
         End Property
+        
+        <Global.System.Configuration.UserScopedSettingAttribute(),  _
+         Global.System.Diagnostics.DebuggerNonUserCodeAttribute(),  _
+         Global.System.Configuration.DefaultSettingValueAttribute("")>  _
+        Public Property Alert() As String
+            Get
+                Return CType(Me("Alert"),String)
+            End Get
+            Set
+                Me("Alert") = value
+            End Set
+        End Property
     End Class
 End Namespace
 

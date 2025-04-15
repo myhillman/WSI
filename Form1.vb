@@ -40,6 +40,7 @@ Public Class Form1
         For callsign = LBound(calls) To UBound(calls)
             CreateMatrix(calls(callsign)) ' Create forms for each startup call
         Next
+
     End Sub
 
     ' Creates a new form for the given callsign
@@ -91,5 +92,66 @@ Public Class Form1
         ' Create and show a new instance of the frmCluster form
         Dim dlg = New frmCluster
         dlg.Show()
+    End Sub
+
+    Private Sub Button2_Click(sender As Object, e As EventArgs) Handles Button2.Click
+        ArrangeWSIWindows()
+    End Sub
+    ''' <summary>
+    ''' Arranges all open WSI windows in a grid layout on the screen.
+    ''' This method calculates the number of rows and columns required to fit all WSI windows
+    ''' within the screen's working area and positions them accordingly.
+    ''' </summary>
+    ''' <remarks>
+    ''' - The method ensures that windows are evenly distributed across the screen.
+    ''' - Horizontal and vertical spacing between windows can be adjusted using the 
+    '''   `horizontalSpacing` and `verticalSpacing` variables.
+    ''' - The method dynamically calculates the grid dimensions based on the number of open WSI windows.
+    ''' - If no WSI windows are open, the method exits early.
+    ''' </remarks>
+    Private Sub ArrangeWSIWindows()
+        ' Get all open WSI windows
+        Dim wsiWindows = Application.OpenForms.OfType(Of WSI)().ToList()
+
+        If wsiWindows.Count = 0 Then Return ' No WSI windows to arrange
+
+        ' Get the screen working area
+        Dim workingArea = Screen.PrimaryScreen.WorkingArea
+
+        ' Calculate grid dimensions (rows and columns)
+        Dim columns = Math.Ceiling(Math.Sqrt(wsiWindows.Count)) ' Number of columns
+        Dim rows = Math.Ceiling(wsiWindows.Count / columns) ' Number of rows
+
+        ' Calculate the total width and height of the grid
+        Dim totalWidth = workingArea.Width
+        Dim totalHeight = workingArea.Height
+
+        ' Calculate the spacing between windows
+        Dim horizontalSpacing = 10 ' Space between columns
+        Dim verticalSpacing = 10   ' Space between rows
+
+        ' Calculate the starting position for the grid
+        Dim startX = workingArea.Left
+        Dim startY = workingArea.Top
+
+        ' Arrange the windows
+        Dim currentRow = 0
+        Dim currentColumn = 0
+
+        For Each wsiWindow In wsiWindows
+            ' Calculate the position for the current window
+            Dim x = startX + (currentColumn * (wsiWindow.Width + horizontalSpacing))
+            Dim y = startY + (currentRow * (wsiWindow.Height + verticalSpacing))
+
+            ' Set the window's position
+            wsiWindow.Location = New Point(x, y)
+
+            ' Move to the next column/row
+            currentColumn += 1
+            If currentColumn >= columns Then
+                currentColumn = 0
+                currentRow += 1
+            End If
+        Next
     End Sub
 End Class

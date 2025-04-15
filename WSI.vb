@@ -7,11 +7,10 @@ Imports System.Drawing.Printing
 
 Public Class WSI
     Const HRDLogbook = "VK3OHM"
-    Public ConnectString As String = "server=localhost;user=root;database=mysql;port=3306;password=rubbish"    ' HRD database
     Public con As New MySqlConnection(ConnectString)     ' connect to HRD log
     Const Phone = "COL_MODE IN ('AM','SSB','USB','LSB','FM')"       ' SQL fragment for Phone mode
     Const CW = "COL_MODE ='CW'"                ' SQL fragment for CW mode
-    Const Digital = "COL_MODE IN ('AMTOR','ARDOP','CHIP','CLOVER','CONTESTI','DOMINO','FSK31','FSK441','FT4','FT8','GTOR','HELL','HFSK','ISCAT','JT4','JT65','JT6M','JT9','MFSK','MINIRTTY','MSK144','MT63','OLIVIA','OPERA','PACKET','PACTOR','PAX','PSK10','PSK125','PSK2K','PSK31','PSK63','PSK63F','PSKAM','PSKFEC31','Q15','QRA64','ROS','RTTY','RTTYM','T10','THOR','THROB','VOI','WINMOR')"    ' SQL fragment for Digital mode
+    Const Digital = "COL_MODE IN ('AMTOR','ARDOP','CHIP','CLOVER','CONTESTI','DOMINO','DSTAR','FREEDV','FSK31','FSK441','FT4','FT8','GTOR','HELL','HFSK','ISCAT','JT4','JT65','JT6M','JT9','MFSK','MINIRTTY','MSK144','MT63','OLIVIA','OPERA','PACKET','PACTOR','PAX','PSK10','PSK125','PSK2K','PSK31','PSK63','PSK63F','PSKAM','PSKFEC31','Q15','QRA64','ROS','RTTY','RTTYM','SSTV','T10','THOR','THROB','VOI','WINMOR')"    ' SQL fragment for Digital mode
     Const Confirmed = "SUM(IF(COL_QSL_RCVD='Y' OR COL_EQSL_QSL_RCVD='Y' OR COL_LOTW_QSL_RCVD='Y' OR COL_LOTW_QSL_RCVD='V',1,0))"
     Private Async Sub OK_Button_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles OK_Button.Click
         Dim value = Await PopulateMatrix()
@@ -43,6 +42,12 @@ Public Class WSI
         ' Initialize DataTables with columns for Band and Mode
         dt1.Columns.Add("Mode", GetType(String)) ' Row headers
         dt2.Columns.Add("Mode", GetType(String)) ' Row headers
+        ' Add a band column for each band that is enabled for cluster display
+        Dim savedBands As List(Of String) = My.Settings.AmateurBands.Split(","c).Select(Function(b) b.Trim()).ToList()
+        For Each band In savedBands
+            dt1.Columns.Add($"BAND_{band}", GetType(String))
+            dt2.Columns.Add($"BAND_{band}", GetType(String))
+        Next
 
         ' Get clublog matches
         Using httpClient As New HttpClient()
@@ -223,8 +228,16 @@ Public Class WSI
         FormatDataGridView(DataGridView2)
 
         ' resize the form
-        Dim borderWidth = Me.Width - Me.ClientSize.Width
-        Me.MaximumSize = New Size(TableLayoutPanel2.Width + borderWidth * 2, TableLayoutPanel1.Bottom + borderWidth + 100)
+        'Dim borderWidth = Me.Width - Me.ClientSize.Width
+        'Me.MaximumSize = New Size(TableLayoutPanel2.Width + borderWidth * 2, TableLayoutPanel1.Bottom + borderWidth + 100)
+        ' Calculate the required width for the form
+        Dim requiredWidth As Integer = Math.Max(DataGridView1.Width + DataGridView1.Left + 20, DataGridView2.Width + DataGridView2.Left + 20) ' Add padding for borders and spacing
+
+        ' Set the form's width to the required width
+        Me.Width = Math.Max(requiredWidth, Me.MinimumSize.Width) ' Ensure it doesn't go below the minimum size
+        ' Calculate the required height for the form
+        Dim requiredHeight = TableLayoutPanel2.Height + TableLayoutPanel2.Top + 40
+        Me.Height = Math.Max(requiredheight, Me.MinimumSize.Height)
         Return result
     End Function
 
@@ -263,13 +276,13 @@ Public Class WSI
                 .BackColor = Color.LightBlue
                 .ForeColor = Color.Blue
             End With
-            With .RowHeadersDefaultCellStyle
+            With .Columns("Mode").DefaultCellStyle
                 .BackColor = Color.LightBlue
                 .ForeColor = Color.Blue
             End With
             For Each col As DataGridViewColumn In .Columns
                 With col
-                    .SortMode = DataGridViewColumnSortMode.Automatic
+                    .SortMode = DataGridViewColumnSortMode.NotSortable
                     .HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleCenter
                 End With
             Next
@@ -283,8 +296,12 @@ Public Class WSI
             .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
             .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
             .ScrollBars = ScrollBars.None
-            .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.Displayed) + .RowHeadersWidth + 2
-            .Height = .Rows.GetRowsHeight(DataGridViewElementStates.None) + .ColumnHeadersHeight + 4
+            .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.Visible) + .RowHeadersWidth + 2
+            .Height = .Rows.GetRowsHeight(DataGridViewElementStates.Visible) + .ColumnHeadersHeight + 4
+            Me.ClientSize = TableLayoutPanel2.PreferredSize
+            Dim borderWidth As Integer = Me.Width - Me.ClientSize.Width
+            Dim titleBarHeight As Integer = Me.Height - Me.ClientSize.Height
+            Me.Size = New Size(TableLayoutPanel2.PreferredSize.Width + borderWidth, TableLayoutPanel2.PreferredSize.Height + titleBarHeight)
         End With
     End Sub
     ' The selected cell displays with a highlight background. Don't want this, so clear selection
@@ -410,10 +427,15 @@ Public Class WSI
         ' Ensure the cell is not a header cell
         If e.RowIndex >= 0 AndAlso e.ColumnIndex >= 0 Then
             ' Get the cell value
-            Dim cellValue As String = If(e.Value IsNot Nothing, e.Value.ToString(), String.Empty)
 
-            ' Determine the background color based on the cell value
-            Select Case cellValue
+            If e.ColumnIndex = 0 Then
+                ' it's the mode column
+                e.CellStyle.BackColor = Color.LightBlue
+                e.CellStyle.ForeColor = Color.Blue
+            Else
+                Dim cellValue As String = If(e.Value IsNot Nothing, e.Value.ToString(), String.Empty)
+                ' Determine the background color based on the cell value
+                Select Case cellValue
                 Case "C" ' Confirmed
                     e.CellStyle.BackColor = Color.Green
                 Case "W" ' Worked
@@ -424,7 +446,12 @@ Public Class WSI
                     e.CellStyle.BackColor = Color.White ' Default color
             End Select
             e.CellStyle.ForeColor = Color.Black
+            End If
         End If
+    End Sub
+
+    Private Sub DataGridView1_CellContentClick(sender As Object, e As DataGridViewCellEventArgs) Handles DataGridView1.CellContentClick
+
     End Sub
 End Class
 

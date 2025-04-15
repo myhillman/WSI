@@ -46,6 +46,7 @@ Public Class frmCluster
     Private buffer As String = "", cr As Integer
     Dim ClusterInitialized As Boolean = False       ' true when cluster config complete
     Private OpenWSIDialogs As Dictionary(Of String, Form) ' Dictionary to store open WSI dialogs
+    Private soundPlayer As New SoundPlayerHelper()      ' Load the sound player
 
     ''' <summary>
     ''' Saves the selected amateur bands to My.Settings whenever a checkbox is changed.
@@ -243,9 +244,6 @@ Public Class frmCluster
         ' get the open WSI dialogs for highlighting of the DataGridView
         OpenWSIDialogs = GetOpenWSIDialogs()
 
-        ' Apply the age filter
-        ApplyAgeFilter(ComboBox1)
-
     End Sub
     ''' <summary>
     ''' Ensures that the specified action is executed on the UI thread.
@@ -282,7 +280,7 @@ Public Class frmCluster
         End If
     End Sub
 
-    Private Shared ReadOnly FrequencyBands As New Dictionary(Of (Integer, Integer), String) From {
+    Public Shared ReadOnly FrequencyBands As New Dictionary(Of (Integer, Integer), String) From {
     {(1800, 2000), "160m"},
     {(3500, 4000), "80m"},
     {(5351, 5366), "60m"},
@@ -625,14 +623,21 @@ Public Class frmCluster
                     If dgv1.DataSource IsNot Nothing Then
                         ' Get the DataTable from wsi form DataGridView1.DataSource
                         Dim dt As DataTable = TryCast(dgv1.DataSource, DataTable)
-                        ' Check for any value (W, C, CL) in band column, i.e. column exists
-                        If dt.Columns.Contains($"BAND_{row.Cells("Band").Value}") Then
-                            ' Reset the background color if previous contact on this band
-                            row.DefaultCellStyle.BackColor = Color.White
-                        Else
+
+                        ' if column exists, and it is not empty, then we've had a contact on ths slot
+                        Dim ColumnName = $"BAND_{band}"
+                        If Not dt.Columns.Contains(ColumnName) OrElse
+                           dt.Rows.Count = 0 OrElse
+                           String.IsNullOrEmpty(dt.Rows(0)(ColumnName)?.ToString()) Then
                             ' Highlight the row if no contact on this band
                             row.DefaultCellStyle.BackColor = Color.LightGreen
-                            SystemSounds.Beep.Play() ' Plays an exclamation sound
+                            ' Play a sound to indicate a new spot
+                            If Not soundPlayer.IsSoundPlaying Then
+                                soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays a notification sound
+                            End If
+                        Else
+                            ' Reset the background color if previous contact on this band
+                            row.DefaultCellStyle.BackColor = Color.White
                         End If
                     End If
                 End If
@@ -701,6 +706,8 @@ Public Class frmCluster
                         dt.Rows.Add(row) ' Add the new row to the DataTable
                     End If
                 End If
+                ' Apply the age filter
+                If Cluster.Client.Available < 3 Then ApplyAgeFilter(ComboBox1)  ' last in a burst of messages
                 DataGridView1.Refresh() ' Refresh the DataGridView to show the new data
             End If
         End If
@@ -1057,10 +1064,49 @@ Public Class frmCluster
             .RunWorkerAsync()
         End With
 
+        LoadSounds()    ' load list of sound files
+
         ' Wait until the user is logged in
         While Not LoggedIn
             Await Task.Delay(100) ' Check every 100ms
         End While
+    End Sub
+    ''' <summary>
+    ''' Loads the available alert sounds into ComboBox3 and sets the selected alert sound.
+    ''' </summary>
+    ''' <remarks>
+    ''' This method performs the following actions:
+    ''' 1. Retrieves a list of available `.wav` files from the sound directory using the `SoundPlayerHelper`.
+    ''' 2. Populates `ComboBox3` with the list of sound files.
+    ''' 3. Temporarily removes the `SelectedIndexChanged` event handler to prevent unnecessary event triggers during initialization.
+    ''' 4. Sets the selected item in `ComboBox3` to the alert sound saved in `My.Settings.Alert`.
+    ''' 5. If the saved alert sound is not found, defaults to the first entry in the list and displays a message to the user.
+    ''' 6. Reattaches the `SelectedIndexChanged` event handler after initialization.
+    ''' 
+    ''' This method ensures that the alert sound selection is properly initialized and prevents unnecessary event handling during setup.
+    ''' </remarks>
+    Sub LoadSounds()
+        If ComboBox3.InvokeRequired Then
+            ComboBox3.Invoke(New Action(AddressOf LoadSounds))
+            Return
+        End If
+        ' Load alert sounds
+        Dim sounds As List(Of String) = soundPlayer.GetWavFiles()
+        ComboBox3.DataSource = sounds
+        ' Temporarily remove the event handler
+        RemoveHandler ComboBox3.SelectedIndexChanged, AddressOf ComboBox3_SelectedIndexChanged
+        ' Update the DataSource
+
+        Dim alertSound As String = My.Settings.Alert
+        Dim alertIndex As Integer = ComboBox3.FindStringExact(alertSound)    ' select current alert
+        If alertIndex >= 0 Then
+            ComboBox3.SelectedIndex = alertIndex ' Select the matching entry
+        Else
+            MessageBox.Show($"Alert sound '{alertSound}' not found in the list. Defaulting to the first entry.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            ComboBox3.SelectedIndex = 0 ' Default to the first entry if no match is found
+        End If
+        ' Reattach the event handler
+        AddHandler ComboBox3.SelectedIndexChanged, AddressOf ComboBox3_SelectedIndexChanged
     End Sub
     ''' <summary>
     ''' Dynamically adds a group of checkboxes to the form, one for each amateur radio band.
@@ -1141,6 +1187,13 @@ Public Class frmCluster
 
     Private Sub btnClose_Click(sender As Object, e As EventArgs) Handles btnClose.Click
         Me.Close() ' Closes the form
+    End Sub
+    Private Sub ComboBox3_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox3.SelectedIndexChanged
+        InvokeIfRequired(ComboBox3, Sub()
+                                        My.Settings.Alert = ComboBox3.SelectedItem.ToString() ' Save the selected value to settings
+                                        My.Settings.Save()
+                                        soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays the selected alert sound
+                                    End Sub)
     End Sub
 #End Region
 End Class

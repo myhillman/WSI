@@ -22,7 +22,7 @@ Partial Class frmCluster
     'Do not modify it using the code editor.
     <System.Diagnostics.DebuggerStepThrough()> _
     Private Sub InitializeComponent()
-        Dim DataGridViewCellStyle1 As DataGridViewCellStyle = New DataGridViewCellStyle()
+        Dim DataGridViewCellStyle2 As DataGridViewCellStyle = New DataGridViewCellStyle()
         TextBox1 = New TextBox()
         DataGridView1 = New DataGridView()
         ComboBox1 = New ComboBox()
@@ -30,6 +30,8 @@ Partial Class frmCluster
         ComboBox2 = New ComboBox()
         Label2 = New Label()
         btnClose = New Button()
+        Label3 = New Label()
+        ComboBox3 = New ComboBox()
         CType(DataGridView1, ComponentModel.ISupportInitialize).BeginInit()
         SuspendLayout()
         ' 
@@ -48,13 +50,13 @@ Partial Class frmCluster
         DataGridView1.AllowUserToDeleteRows = False
         DataGridView1.AllowUserToOrderColumns = True
         DataGridView1.AllowUserToResizeRows = False
-        DataGridViewCellStyle1.BackColor = Color.FromArgb(CByte(224), CByte(224), CByte(224))
-        DataGridView1.AlternatingRowsDefaultCellStyle = DataGridViewCellStyle1
-        DataGridView1.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
+        DataGridViewCellStyle2.BackColor = Color.FromArgb(CByte(224), CByte(224), CByte(224))
+        DataGridView1.AlternatingRowsDefaultCellStyle = DataGridViewCellStyle2
+        DataGridView1.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left
         DataGridView1.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize
         DataGridView1.Location = New Point(12, 106)
         DataGridView1.Name = "DataGridView1"
-        DataGridView1.Size = New Size(961, 536)
+        DataGridView1.Size = New Size(961, 521)
         DataGridView1.TabIndex = 1
         ' 
         ' ComboBox1
@@ -93,6 +95,7 @@ Partial Class frmCluster
         ' 
         ' btnClose
         ' 
+        btnClose.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
         btnClose.Location = New Point(980, 619)
         btnClose.Name = "btnClose"
         btnClose.Size = New Size(75, 23)
@@ -100,11 +103,32 @@ Partial Class frmCluster
         btnClose.Text = "Close"
         btnClose.UseVisualStyleBackColor = True
         ' 
+        ' Label3
+        ' 
+        Label3.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
+        Label3.AutoSize = True
+        Label3.Location = New Point(13, 642)
+        Label3.Name = "Label3"
+        Label3.Size = New Size(69, 15)
+        Label3.TabIndex = 7
+        Label3.Text = "Alert Sound"
+        ' 
+        ' ComboBox3
+        ' 
+        ComboBox3.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
+        ComboBox3.FormattingEnabled = True
+        ComboBox3.Location = New Point(96, 639)
+        ComboBox3.Name = "ComboBox3"
+        ComboBox3.Size = New Size(468, 23)
+        ComboBox3.TabIndex = 8
+        ' 
         ' frmCluster
         ' 
         AutoScaleDimensions = New SizeF(7F, 15F)
         AutoScaleMode = AutoScaleMode.Font
-        ClientSize = New Size(1124, 654)
+        ClientSize = New Size(1124, 665)
+        Controls.Add(ComboBox3)
+        Controls.Add(Label3)
         Controls.Add(btnClose)
         Controls.Add(Label2)
         Controls.Add(ComboBox2)
@@ -126,4 +150,6 @@ Partial Class frmCluster
     Friend WithEvents ComboBox2 As ComboBox
     Friend WithEvents Label2 As Label
     Friend WithEvents btnClose As Button
+    Friend WithEvents Label3 As Label
+    Friend WithEvents ComboBox3 As ComboBox
 End Class

@@ -27,6 +27,7 @@ Partial Class Form1
         Label2 = New Label()
         TextBox2 = New TextBox()
         Button1 = New Button()
+        Button2 = New Button()
         SuspendLayout()
         ' 
         ' TextBox1
@@ -78,11 +79,21 @@ Partial Class Form1
         Button1.Text = "DX Cluster"
         Button1.UseVisualStyleBackColor = True
         ' 
+        ' Button2
+        ' 
+        Button2.Location = New Point(556, 53)
+        Button2.Name = "Button2"
+        Button2.Size = New Size(75, 23)
+        Button2.TabIndex = 5
+        Button2.Text = "Arrange All"
+        Button2.UseVisualStyleBackColor = True
+        ' 
         ' Form1
         ' 
         AutoScaleDimensions = New SizeF(7F, 15F)
         AutoScaleMode = AutoScaleMode.Font
         ClientSize = New Size(680, 82)
+        Controls.Add(Button2)
         Controls.Add(Button1)
         Controls.Add(TextBox2)
         Controls.Add(Label2)
@@ -99,4 +110,5 @@ Partial Class Form1
     Friend WithEvents Label2 As Label
     Friend WithEvents TextBox2 As TextBox
     Friend WithEvents Button1 As Button
+    Friend WithEvents Button2 As Button
 End Class
