@@ -315,7 +315,10 @@ Public Class WSI
         Try
             With PrintDocument1
                 ' Set the page orientation to landscape
-                .DefaultPageSettings.Landscape = True
+                With .DefaultPageSettings
+                    .Landscape = True
+                    .Margins = New Margins(0, 0, 0, 0) ' Set margins to zero
+                End With
 
                 ' Attach the PrintPage event handler
                 AddHandler .PrintPage, AddressOf PrintImage
@@ -378,37 +381,30 @@ Public Class WSI
     ''' 
     ''' This method is invoked during the <see cref="PrintDocument.PrintPage"/> event and is designed to handle a single-page print job.
     ''' </remarks>
+    ''' <summary>
+    ''' Handles the printing of the form by capturing it as an image and scaling it to fit within the adjusted printable area.
+    ''' </summary>
+    ''' <param name="sender">The source of the event, typically the <see cref="PrintDocument"/> object.</param>
+    ''' <param name="e">Provides data for the <see cref="PrintPageEventArgs"/> event, including graphics and page settings.</param>
     Private Sub PrintImage(ByVal sender As Object, ByVal e As PrintPageEventArgs)
         ' Capture the form as an image
         Dim formImage As Bitmap = CaptureForm()
 
-        ' Get the aspect ratios of the image and the margin bounds
-        Dim imageAspectRatio As Double = formImage.Width / formImage.Height
-        Dim marginAspectRatio As Double = e.MarginBounds.Width / e.MarginBounds.Height
+        ' Calculate the scaled dimensions (scale factor = 2)
+        Dim scaledWidth As Integer = formImage.Width * 2
+        Dim scaledHeight As Integer = formImage.Height * 2
 
-        ' Calculate the scaled dimensions
-        Dim scaledWidth As Integer
-        Dim scaledHeight As Integer
-        If imageAspectRatio > marginAspectRatio Then
-            ' Scale based on width
-            scaledWidth = e.MarginBounds.Width
-            scaledHeight = CInt(e.MarginBounds.Width / imageAspectRatio)
-        Else
-            ' Scale based on height
-            scaledHeight = e.MarginBounds.Height
-            scaledWidth = CInt(e.MarginBounds.Height * imageAspectRatio)
-        End If
+        ' Calculate the position to center the scaled image on the page
+        Dim offsetX As Integer = (e.PageBounds.Width - scaledWidth) \ 2
+        Dim offsetY As Integer = (e.PageBounds.Height - scaledHeight) \ 2
 
-        ' Center the image within the margin bounds
-        Dim offsetX As Integer = e.MarginBounds.X + (e.MarginBounds.Width - scaledWidth) \ 2
-        Dim offsetY As Integer = e.MarginBounds.Y + (e.MarginBounds.Height - scaledHeight) \ 2
-
-        ' Draw the image on the page
+        ' Draw the image at the scaled size
         e.Graphics.DrawImage(formImage, offsetX, offsetY, scaledWidth, scaledHeight)
 
         ' Indicate that there are no more pages to print
         e.HasMorePages = False
     End Sub
+
 
     Private Sub DataGridView1_CellFormatting(sender As Object, e As DataGridViewCellFormattingEventArgs) Handles DataGridView2.CellFormatting
         DGVCellFormatting(sender, e)
