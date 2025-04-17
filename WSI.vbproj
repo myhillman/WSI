@@ -8,6 +8,7 @@
     <MyType>WindowsForms</MyType>
     <ApplicationIcon>balloon.ico</ApplicationIcon>
     <GenerateDocumentationFile>True</GenerateDocumentationFile>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>

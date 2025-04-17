@@ -4,6 +4,7 @@ Imports Microsoft.AspNetCore.WebUtilities
 Imports System.Text.Json
 Imports System.Net.Http.Json
 Imports System.Drawing.Printing
+Imports System.Threading
 
 Public Class WSI
     Const HRDLogbook = "VK3OHM"
@@ -100,11 +101,12 @@ Public Class WSI
                 .CommandType = CommandType.Text
             End With
             sqldr = cmd.ExecuteReader
+            Dim PartialLabel = $"QSO for {Me.Text}"
             If Not sqldr.HasRows Then
                 ' No callsign in database
-                Label1.Text = $"No QSO for {Me.Text}"
+                Label1.Text = $"No {PartialLabel}"
             Else
-                Label1.Text = $"QSO for {Me.Text}"
+                Label1.Text = PartialLabel
                 While sqldr.Read
                     ' create column (band) if does not exist
                     'Dim col As Integer = -1, row As Integer = -1
@@ -186,11 +188,12 @@ Public Class WSI
                 .CommandType = CommandType.Text
             End With
             sqldr = cmd.ExecuteReader
+            Dim PartialLabel = $"QSO for {Country} ({DXCC})"
             If Not sqldr.HasRows Then
                 ' No callsign in database
-                Label2.Text = $"No QSO for {Me.Text}"
+                Label2.Text = $"No {PartialLabel}"
             Else
-                Label2.Text = $"QSO for {Country} ({DXCC})"
+                Label2.Text = PartialLabel
                 While sqldr.Read
                     ' create column (band) if does not exist
                     'Dim col As Integer = -1, row As Integer = -1
@@ -228,16 +231,15 @@ Public Class WSI
         FormatDataGridView(DataGridView2)
 
         ' resize the form
-        'Dim borderWidth = Me.Width - Me.ClientSize.Width
-        'Me.MaximumSize = New Size(TableLayoutPanel2.Width + borderWidth * 2, TableLayoutPanel1.Bottom + borderWidth + 100)
-        ' Calculate the required width for the form
-        Dim requiredWidth As Integer = Math.Max(DataGridView1.Width + DataGridView1.Left + 20, DataGridView2.Width + DataGridView2.Left + 20) ' Add padding for borders and spacing
+        TableLayoutPanel2.PerformLayout()       ' let panel size itself
+        Me.ClientSize = TableLayoutPanel2.PreferredSize
+        Dim borderWidth As Integer = Me.Width - Me.ClientSize.Width
+        Dim titleBarHeight As Integer = Me.Height - Me.ClientSize.Height
+        Me.Size = New Size(TableLayoutPanel2.PreferredSize.Width + borderWidth, TableLayoutPanel2.PreferredSize.Height + titleBarHeight)
 
-        ' Set the form's width to the required width
-        Me.Width = Math.Max(requiredWidth, Me.MinimumSize.Width) ' Ensure it doesn't go below the minimum size
-        ' Calculate the required height for the form
-        Dim requiredHeight = TableLayoutPanel2.Height + TableLayoutPanel2.Top + 40
-        Me.Height = Math.Max(requiredheight, Me.MinimumSize.Height)
+        ' Force layout updates
+        Me.PerformLayout()
+        Me.Refresh()
         Return result
     End Function
 
@@ -268,6 +270,7 @@ Public Class WSI
     ''' </remarks>
     Private Sub FormatDataGridView(dgv As DataGridView)
         With dgv
+            .SuspendLayout()
             .RowHeadersVisible = False      ' hide the Select column
             .EnableHeadersVisualStyles = False
             .GridColor = Color.White
@@ -298,10 +301,7 @@ Public Class WSI
             .ScrollBars = ScrollBars.None
             .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.Visible) + .RowHeadersWidth + 2
             .Height = .Rows.GetRowsHeight(DataGridViewElementStates.Visible) + .ColumnHeadersHeight + 4
-            Me.ClientSize = TableLayoutPanel2.PreferredSize
-            Dim borderWidth As Integer = Me.Width - Me.ClientSize.Width
-            Dim titleBarHeight As Integer = Me.Height - Me.ClientSize.Height
-            Me.Size = New Size(TableLayoutPanel2.PreferredSize.Width + borderWidth, TableLayoutPanel2.PreferredSize.Height + titleBarHeight)
+            .ResumeLayout()
         End With
     End Sub
     ' The selected cell displays with a highlight background. Don't want this, so clear selection
@@ -355,8 +355,21 @@ Public Class WSI
         ' Get the bounds of the form, including borders and title bar
         Dim formBounds As Rectangle = Me.Bounds
 
-        ' Create a bitmap with the size of the form bounds
+        ' Adjust the bounds slightly inward to avoid capturing the desktop background
+        ' I don't know why this is happening
+        Const margin = 8    ' unexplained margin left, right and bottom of image
+        With formBounds
+            .X += margin : .Y += 1 : .Width -= margin * 2 : .Height -= margin
+        End With
+
+        ' Create a bitmap with the size of the adjusted form bounds
         Dim bmp As New Bitmap(formBounds.Width, formBounds.Height)
+
+        ' Ensure the form is fully visible and in the foreground
+        Me.Activate()
+        Me.BringToFront()
+        Me.Refresh()
+        Thread.Sleep(100) ' Allow the form to render completely
 
         ' Capture the form from the screen
         Using g As Graphics = Graphics.FromImage(bmp)
@@ -365,6 +378,7 @@ Public Class WSI
 
         Return bmp
     End Function
+
 
     ''' <summary>
     ''' Handles the printing of the form by capturing it as an image and scaling it to fit within the printable area.
@@ -381,24 +395,33 @@ Public Class WSI
     ''' 
     ''' This method is invoked during the <see cref="PrintDocument.PrintPage"/> event and is designed to handle a single-page print job.
     ''' </remarks>
-    ''' <summary>
-    ''' Handles the printing of the form by capturing it as an image and scaling it to fit within the adjusted printable area.
-    ''' </summary>
-    ''' <param name="sender">The source of the event, typically the <see cref="PrintDocument"/> object.</param>
-    ''' <param name="e">Provides data for the <see cref="PrintPageEventArgs"/> event, including graphics and page settings.</param>
     Private Sub PrintImage(ByVal sender As Object, ByVal e As PrintPageEventArgs)
+        Dim dpiX As Single, dpiY As Single
+        Using g As Graphics = Me.CreateGraphics()
+            dpiX = g.DpiX
+            dpiY = g.DpiY
+        End Using
         ' Capture the form as an image
         Dim formImage As Bitmap = CaptureForm()
 
-        ' Calculate the scaled dimensions (scale factor = 2)
-        Dim scaledWidth As Integer = formImage.Width * 2
-        Dim scaledHeight As Integer = formImage.Height * 2
+        ' Get the printer's non-printable area
+        Dim hardMarginX As Single = e.PageSettings.HardMarginX
+        Dim hardMarginY As Single = e.PageSettings.HardMarginY
 
-        ' Calculate the position to center the scaled image on the page
-        Dim offsetX As Integer = (e.PageBounds.Width - scaledWidth) \ 2
-        Dim offsetY As Integer = (e.PageBounds.Height - scaledHeight) \ 2
+        ' Calculate the scaling factor to fit the image within the printable area
+        Dim scaleX As Single = e.PageSettings.PrintableArea.Width / formImage.Width
+        Dim scaleY As Single = e.PageSettings.PrintableArea.Height / formImage.Height
+        Dim scale As Single = Math.Min(scaleX, scaleY) ' Maintain aspect ratio
 
-        ' Draw the image at the scaled size
+        ' Calculate the scaled dimensions
+        Dim scaledWidth As Single = formImage.Width * scale
+        Dim scaledHeight As Single = formImage.Height * scale
+
+        ' Calculate the position to align the image to the top of the printable area
+        Dim offsetX As Single = hardMarginX + (e.PageSettings.PrintableArea.Width - scaledWidth) / 2
+        Dim offsetY As Single = hardMarginY ' Align to the top of the printable area
+
+        ' Draw the image at the scaled size and adjusted position
         e.Graphics.DrawImage(formImage, offsetX, offsetY, scaledWidth, scaledHeight)
 
         ' Indicate that there are no more pages to print
@@ -432,22 +455,18 @@ Public Class WSI
                 Dim cellValue As String = If(e.Value IsNot Nothing, e.Value.ToString(), String.Empty)
                 ' Determine the background color based on the cell value
                 Select Case cellValue
-                Case "C" ' Confirmed
-                    e.CellStyle.BackColor = Color.Green
-                Case "W" ' Worked
-                    e.CellStyle.BackColor = Color.LightGray
-                Case "CL" ' Clublog match
-                    e.CellStyle.BackColor = Color.Yellow
-                Case Else
-                    e.CellStyle.BackColor = Color.White ' Default color
-            End Select
-            e.CellStyle.ForeColor = Color.Black
+                    Case "C" ' Confirmed
+                        e.CellStyle.BackColor = Color.Green
+                    Case "W" ' Worked
+                        e.CellStyle.BackColor = Color.LightGray
+                    Case "CL" ' Clublog match
+                        e.CellStyle.BackColor = Color.Yellow
+                    Case Else
+                        e.CellStyle.BackColor = Color.White ' Default color
+                End Select
+                e.CellStyle.ForeColor = Color.Black
             End If
         End If
-    End Sub
-
-    Private Sub DataGridView1_CellContentClick(sender As Object, e As DataGridViewCellEventArgs) Handles DataGridView1.CellContentClick
-
     End Sub
 End Class
 

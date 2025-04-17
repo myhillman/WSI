@@ -1,9 +1,8 @@
 ﻿Imports System.Net.Sockets
-Imports System.Net
-Imports System.Threading
 Imports System.ComponentModel
 Imports System.Windows.Forms.VisualStyles.VisualStyleElement.Rebar
-Imports System.Media
+Imports System.Text
+Imports System.Collections.Concurrent
 
 ''' <summary>
 ''' Represents the main form for interacting with a DX cluster server.
@@ -26,27 +25,15 @@ Imports System.Media
 ''' </remarks>
 
 Public Class frmCluster
-    ' Constants for the DX cluster server and port
-    Const DXcluster = "hrd.wa9pie.net"
-    Const port = 8000
-
-    ' TCP client for connecting to the DX cluster
-    Dim Cluster As New TcpClient()
-    Dim localAddr As IPAddress = IPAddress.Any
-    Dim listener As New TcpListener(localAddr, port)
-
-    ' BackgroundWorker for handling asynchronous communication with the cluster
-    Dim WithEvents Bgw As New BackgroundWorker
 
     ' Flags to track the state of the connection and operations
     Private LoggedIn As Boolean = False
-    Dim CallList As New List(Of String)     ' list of calls to poll
     Private PollingTimer As System.Timers.Timer     ' timer to poll cluster
-    Private ResponseReceivedEvent As New Threading.ManualResetEvent(False)
     Private buffer As String = "", cr As Integer
     Dim ClusterInitialized As Boolean = False       ' true when cluster config complete
-    Private OpenWSIDialogs As Dictionary(Of String, Form) ' Dictionary to store open WSI dialogs
+    Private OpenWSIDialogs As ConcurrentDictionary(Of String, Form) ' Dictionary to store open WSI dialogs
     Private soundPlayer As New SoundPlayerHelper()      ' Load the sound player
+    Private clusterManager As New ClusterManager()
 
     ''' <summary>
     ''' Saves the selected amateur bands to My.Settings whenever a checkbox is changed.
@@ -67,104 +54,31 @@ Public Class frmCluster
         End If
     End Sub
 
-    ''' <summary>
-    ''' Handles the DoWork event for the BackgroundWorker (Bgw).
-    ''' This method runs on a separate thread to handle asynchronous communication with the DX cluster server.
-    ''' It continuously listens for incoming data from the server and processes it.
-    ''' </summary>
-    ''' <param name="sender">The source of the event, typically the BackgroundWorker instance.</param>
-    ''' <param name="e">Provides data for the DoWork event.</param>
-    ''' <remarks>
-    ''' Key functionality of this method:
-    ''' 1. **Continuous Listening**:
-    '''    - Runs a loop that listens for incoming data from the server until the BackgroundWorker is canceled.
-    ''' 2. **Data Reception**:
-    '''    - Checks if data is available on the TCP connection and reads it into a buffer.
-    '''    - Converts the received bytes into a string and appends it to the buffer.
-    ''' 3. **Login Handling**:
-    '''    - Detects login prompts (e.g., "login: " or "password: ") and sends the appropriate credentials.
-    '''    - Marks the user as logged in once the login process is complete.
-    ''' 4. **Message Processing**:
-    '''    - Extracts individual messages from the buffer and processes them using the `ProcessMessage` method.
-    ''' 5. **Error Handling**:
-    '''    - Catches and logs any exceptions that occur during the operation to ensure the application remains stable.
-    ''' 
-    ''' This method ensures that communication with the DX cluster server is handled efficiently
-    ''' without blocking the main UI thread.
-    ''' </remarks>
-    Private Async Sub Bgw_DoWork(sender As Object, e As System.ComponentModel.DoWorkEventArgs) Handles Bgw.DoWork
-        Try
-            While Not Bgw.CancellationPending ' Keep running until the worker is cancelled
-
-                If Cluster.Client.Available > 0 Then
-                    Debug.WriteLine("Data available from server. Setting ResponseReceivedEvent.")
-                    Dim byt_to_receive(Cluster.Available - 1) As Byte
-                    Cluster.Client.Receive(byt_to_receive, 0, byt_to_receive.Length, SocketFlags.None)
-                    Dim String_From_Byte As String = System.Text.Encoding.ASCII.GetString(byt_to_receive)
-                    buffer += String_From_Byte
-                    Debug.WriteLine($"Received: {buffer}")
-
-                    ' Signal that a response has been received
-                    ResponseReceivedEvent.Set()
-
-                    If Not LoggedIn Then
-                        ' Look for Login: , password: without CR
-                        If buffer.EndsWith("login: ") Then
-                            AppendTextSafe(buffer)
-                            Await SendClusterAsync($"{ClusterUsername}{vbCrLf}") ' Send username
-                        ElseIf buffer.EndsWith("password: ") Then
-                            AppendTextSafe(buffer)
-                            Await SendClusterAsync($"{ClusterPassword}{vbCrLf}") ' Send password
-                        ElseIf buffer.Contains(">>") Then
-                            ' We are logged in
-                            AppendTextSafe(buffer)
-                            LoggedIn = True
-                            ' Run InitializeCluster in a separate task
-                            If Not ClusterInitialized Then
-#Disable Warning BC42358 ' Because this call is not awaited, execution of the current method continues before the call is completed
-                                Task.Run(Function() InitializeCluster())
-#Enable Warning BC42358 ' Because this call is not awaited, execution of the current method continues before the call is completed
-                            End If
-                        End If
-                    End If
-                    ' Process the incoming data
-                    cr = buffer.IndexOf(vbCr)   ' Get the index of the first CR character
-                    While cr <> -1
-                        Dim message As String
-                        If cr = 0 Then
-                            message = ""
-                        Else
-                            message = buffer.Substring(0, cr) ' Extract the message
-                        End If
-                        buffer = buffer.Substring(cr + 2) ' Remove the processed message from the buffer
-                        cr = buffer.IndexOf(vbCr) ' Check for the next message
-                        ' Process the message
-                        ProcessMessage(message)
-                    End While
-                End If
-            End While
-        Catch ex As Exception
-            AppendTextSafe($"Error in DoWork: {ex.Message}{vbCrLf}")
-        End Try
-    End Sub
+#Region "Initialization"
     ''' <summary>
     ''' Initializes the DX cluster with predefined settings and starts the polling timer.
     ''' This method ensures that the cluster is configured only once and prevents multiple initializations.
     ''' </summary>
     ''' <returns>A Task representing the asynchronous operation.</returns>
     Private Async Function InitializeCluster() As Task
+        ' Connect to the cluster
         If ClusterInitialized Then Return ' Prevent multiple initializations
-        Await SendClusterAsync($"set/name Marc{vbCrLf}")
-        Await SendClusterAsync($"set/qth Donvale{vbCrLf}")
-        Await SendClusterAsync($"set/qra QF22oe{vbCrLf}")
-        Await SendClusterAsync($"unset/echo{vbCrLf}")
-        Await SendClusterAsync($"set/prompt >>{vbCrLf}")
-        Await SendClusterAsync($"set/ve7cc{vbCrLf}")
-        Await SendClusterAsync($"unset/wcy{vbCrLf}")
-        Await SendClusterAsync($"unset/wwv{vbCrLf}")
-        Await SendClusterAsync($"sh/filter{vbCrLf}")
-        Await SendClusterAsync($"clear/spots all{vbCrLf}")
-        Await SendClusterAsync($"sh/filter{vbCrLf}")
+        Await clusterManager.ConnectAsync()         ' connect to cluster
+        Await SendClusterCommand($"{ClusterUsername}{vbCrLf}")  ' send username
+        LoggedIn = True
+        ' Send a series of commands and wait for ">>" prompt
+        Await SendClusterCommand($"unset/echo{vbCrLf}")
+        Await SendClusterCommand($"set/prompt >>{vbCrLf}")
+        Await SendClusterCommand($"set/name Marc{vbCrLf}")
+        Await SendClusterCommand($"set/qth Donvale{vbCrLf}")
+        Await SendClusterCommand($"set/qra QF22oe{vbCrLf}")
+        Await SendClusterCommand($"set/ve7cc{vbCrLf}")
+        Await SendClusterCommand($"unset/wcy{vbCrLf}")
+        Await SendClusterCommand($"unset/wwv{vbCrLf}")
+        Await SendClusterCommand($"sh/filter{vbCrLf}")
+        Await SendClusterCommand($"clear/spots all{vbCrLf}")
+        Await SendClusterCommand($"sh/filter{vbCrLf}")
+        ClusterInitialized = True
 
         ' Start the polling timer
         ' Update the polling interval
@@ -180,6 +94,11 @@ Public Class frmCluster
 
         ClusterInitialized = True
     End Function
+    Private Async Function SendClusterCommand(command As String) As Task
+        Dim response = Await clusterManager.SendCommandAsync(command)
+        AppendTextSafe(TextBox1, response)
+    End Function
+
     ''' <summary>
     ''' Sets the PollingTimer interval based on the selected value in ComboBox2.
     ''' Ensures thread-safe access and validates the selected value.
@@ -189,9 +108,9 @@ Public Class frmCluster
         If ComboBox2.SelectedValue IsNot Nothing AndAlso TypeOf ComboBox2.SelectedValue Is TimeSpan Then
             Dim selectedTimeSpan As TimeSpan = CType(ComboBox2.SelectedValue, TimeSpan)
             PollingTimer.Interval = selectedTimeSpan.TotalMilliseconds
-            Debug.WriteLine($"Polling interval set to {PollingTimer.Interval} ms.")
+            Debug.WriteLine($"Polling interval set to {PollingTimer.Interval / 1000} s.")
         Else
-            AppendTextSafe("Error: Invalid or null SelectedValue in ComboBox2." & vbCrLf)
+            AppendTextSafe(TextBox1, "Error: Invalid or null SelectedValue in ComboBox2." & vbCrLf)
         End If
     End Sub
     Private Sub OnPollingTimerElapsed(sender As Object, e As Timers.ElapsedEventArgs)
@@ -222,28 +141,32 @@ Public Class frmCluster
     ''' without blocking the main thread.
     ''' </remarks>
     Private Async Sub PollCluster()
-        If Not LoggedIn OrElse Bgw.CancellationPending Then
+
+        If Not LoggedIn Then
             PollingTimer.Stop() ' Stop the timer if not logged in or if cancellation is requested
             Return
         End If
 
-        ' Create list of callsigns to poll from StartUp list, and current callsign
-        CallList.Clear()
-        If My.Settings.OnStartup <> "" Then CallList = Split(My.Settings.OnStartup, ",").ToList
-        If Form1.TextBox1.Text <> "" Then CallList.Add(Form1.TextBox1.Text)
-
-        ' Create a copy of the CallList to avoid modification during enumeration
-        Dim callListCopy As New List(Of String)(CallList)
+        ' Get list of all active WSI dialogs
+        GetOpenWSIDialogs()
 
         ' Perform polling logic
-        For Each callsign In callListCopy
-            ' Send the sh/dx command
-            Await SendClusterAsync($"sh/dx {callsign}{vbCrLf}")
+        For Each kvp In OpenWSIDialogs
+            ' Send the sh/dx command and wait for a burst of data
+            Dim response = Await clusterManager.SendCommandAsync($"sh/dx {kvp.Key}{vbCrLf}", isMultiline:=True)
+            If Not String.IsNullOrWhiteSpace(response) Then
+                ' Pull apart buffer into messages
+                Dim messages As String() = response.Split(New String() {vbCrLf}, StringSplitOptions.RemoveEmptyEntries)
+                For Each message In messages
+                    If Not String.IsNullOrWhiteSpace(message) Then
+                        ' Process each message
+                        ProcessMessage(message)
+                    End If
+                Next
+            End If
         Next
 
-        ' get the open WSI dialogs for highlighting of the DataGridView
-        OpenWSIDialogs = GetOpenWSIDialogs()
-
+        ApplyAgeFilter(ComboBox1)  ' Apply the age filter
     End Sub
     ''' <summary>
     ''' Ensures that the specified action is executed on the UI thread.
@@ -272,7 +195,8 @@ Public Class frmCluster
     End Sub
     Private Sub ProcessMessage(message As String)
         ' Log the message to TextBox1
-        AppendTextSafe($"<-- {message}{vbCrLf}")   ' display the message in the TextBox
+        AppendTextSafe(TextBox1, $"<-- {message}{vbCrLf}")   ' display the message in the TextBox
+        Debug.WriteLine($"Processing Message: {message}")
         ' Handle cluster data (e.g., CC11 format)
         If message.Contains("^"c) Then
             ' Parse and display cluster data
@@ -374,133 +298,17 @@ Public Class frmCluster
     ''' This method iterates through all open forms in the application and filters out those of type WSI.
     ''' It is useful for managing and interacting with multiple WSI dialog instances.
     ''' </remarks>
-    Public Shared Function GetOpenWSIDialogs() As Dictionary(Of String, Form)
-        Dim wsiDialogs As New Dictionary(Of String, Form)
+    Public Shared Function GetOpenWSIDialogs() As ConcurrentDictionary(Of String, Form)
+        Dim wsiDialogs As New ConcurrentDictionary(Of String, Form)
         For Each frm As Form In Application.OpenForms
             If TypeOf frm Is WSI Then
                 Dim t = frm.Text
-                wsiDialogs.Add(frm.Text, CType(frm, WSI))
+                wsiDialogs.TryAdd(frm.Text, frm)
             End If
         Next
         Return wsiDialogs
     End Function
 
-    ''' <summary>
-    ''' Sends a command or message to the DX cluster server over a TCP connection.
-    ''' </summary>
-    ''' <param name="msg">The message or command to send to the cluster server.</param>
-    ''' <remarks>
-    ''' This method converts the provided message into a byte array and sends it to the cluster server
-    ''' using the established TCP connection. It also appends the message to the TextBox for logging purposes.
-    ''' If an error occurs during the send operation, the error is logged to the TextBox.
-    ''' </remarks>
-    Async Function SendClusterAsync(msg As String) As Task
-        Try
-            ' Check if the Cluster is connected
-            If Not Cluster.Connected Then
-                AppendTextSafe("Connection lost. Attempting to reconnect..." & vbCrLf)
-                Try
-                    Await Cluster.ConnectAsync(DXcluster, port).ConfigureAwait(False)
-                    Thread.Sleep(1000) ' Wait for connection
-                    If Not Cluster.Connected Then
-                        AppendTextSafe("Reconnection failed." & vbCrLf)
-                        Return
-                    End If
-                    AppendTextSafe("Reconnected successfully." & vbCrLf)
-                Catch ex As Exception
-                    AppendTextSafe($"Reconnection failed: {ex.Message}" & vbCrLf)
-                    Return
-                End Try
-            End If
-
-            ' Reset the event before waiting for a response
-            ResponseReceivedEvent.Reset()
-
-            ' Convert the command to bytes and send it to the cluster
-            Dim byt_to_send() As Byte = System.Text.Encoding.ASCII.GetBytes($"{msg}")
-            Await Cluster.GetStream().WriteAsync(byt_to_send)
-
-            ' Append the command to the TextBox for display
-            AppendTextSafe($"-> {msg}")
-            Debug.Write($"Sent: {msg}")
-
-            ' Wait for response from cluster
-            If Not ResponseReceivedEvent.WaitOne(5000) Then
-                AppendTextSafe($"SendCluster: no response to command{vbCrLf}")
-            Else
-                Debug.WriteLine("Response received.")
-            End If
-            Thread.Sleep(200) ' Small delay to allow for processing
-        Catch ex As Exception
-            AppendTextSafe($"Error in SendCluster: {ex.Message}{vbCrLf}")
-        End Try
-    End Function
-    ''' <summary>
-    ''' Handles the Closing event for the frmCluster form.
-    ''' Performs cleanup operations to ensure proper resource disposal and prevent memory leaks.
-    ''' </summary>
-    ''' <param name="sender">The source of the event, typically the frmCluster form.</param>
-    ''' <param name="e">Provides data for the CancelEventArgs event, allowing the closing operation to be canceled if needed.</param>
-    ''' <remarks>
-    ''' This method performs the following cleanup tasks:
-    ''' 1. Stops and disposes of the PollingTimer to release resources and prevent further polling.
-    ''' 2. Cancels the BackgroundWorker if it is running to stop any ongoing asynchronous operations.
-    ''' 3. Closes the TCP connection to the DX cluster server to ensure the connection is properly terminated.
-    ''' 
-    ''' These steps ensure that all resources used by the frmCluster form are released when the form is closed,
-    ''' preventing potential issues such as memory leaks or unresponsive background tasks.
-    ''' </remarks>
-    Private Sub frmCluster_Closing(sender As Object, e As CancelEventArgs) Handles MyBase.Closing
-        ' Close the form
-        ' Stop the polling timer
-        If PollingTimer IsNot Nothing Then
-            PollingTimer.Stop()
-            PollingTimer.Dispose()
-        End If
-
-        ' Cancel the background worker
-        If Bgw IsNot Nothing AndAlso Bgw.IsBusy Then
-            Bgw.CancelAsync()
-        End If
-
-        ' Close the TCP connection
-        If Cluster IsNot Nothing AndAlso Cluster.Connected Then
-            Cluster.Close()
-        End If
-    End Sub
-    ''' <summary>
-    ''' Safely appends text to a TextBox control from any thread.
-    ''' Ensures thread-safe updates to the TextBox by invoking the update on the UI thread if necessary.
-    ''' </summary>
-    ''' <param name="text">The text to append to the TextBox.</param>
-    ''' <remarks>
-    ''' This method is useful in scenarios where background threads (e.g., a BackgroundWorker) 
-    ''' need to update the UI, which is not thread-safe by default.
-    ''' It also limits the number of lines in the TextBox to a maximum of 50, 
-    ''' removing older lines to maintain performance and readability.
-    ''' </remarks>
-    Private Sub AppendTextSafe(text As String)
-        Try
-            If TextBox1.InvokeRequired Then
-                TextBox1.Invoke(New Action(Of String)(AddressOf AppendTextSafe), text)
-                Return
-            End If
-
-            ' Append the new text
-            TextBox1.AppendText(text)
-
-            Const maxLines As Integer = 50  ' Limit the number of lines to 50
-            Dim lines As String() = TextBox1.Lines
-            If lines.Length > maxLines Then
-                TextBox1.Lines = lines.Skip(lines.Length - maxLines).ToArray()
-            End If
-            ' Scroll to the last line
-            TextBox1.SelectionStart = TextBox1.Text.Length
-            TextBox1.ScrollToCaret()
-        Catch ex As Exception
-            Debug.WriteLine($"Error in AppendTextSafe: {ex.Message}")
-        End Try
-    End Sub
     ''' <summary>
     ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
     ''' This DataTable is used as the data source for a ComboBox to allow users to select an update interval.
@@ -558,6 +366,7 @@ Public Class frmCluster
             Throw New InvalidOperationException("Unexpected DataSource type.")
         End If
     End Function
+#End Region
 
 #Region "DataGridView Helpers"
     ' Methods related to DataGridView
@@ -613,7 +422,7 @@ Public Class frmCluster
         Dim band As String = row.Cells("Band").Value?.ToString()
         If String.IsNullOrEmpty(band) Then Return ' Exit if the band value is empty
 
-        If OpenWSIDialogs IsNot Nothing Then
+        If Not OpenWSIDialogs.IsEmpty Then
             Dim wsiDialog = OpenWSIDialogs(row.Cells("DX Call").Value)    ' get WSI dialog for this call
             If wsiDialog IsNot Nothing Then
                 Dim dgv1 = CType(FindControlRecursive(wsiDialog.Controls(0), "DataGridView1"), DataGridView)    ' find the DataGridView control
@@ -679,9 +488,10 @@ Public Class frmCluster
         If Me.DataGridView1.InvokeRequired Then
             Me.DataGridView1.Invoke(New Action(Of String)(AddressOf ParseClusterData), data)
         Else
+            data = data.Trim(vbCr, vbLf)    ' remove rubbish
             Dim columns As String() = data.Split("^"c) ' Split the string into columns
-            Dim dt As DataTable
             If columns(0) = "CC11" Then     ' it's a cluster message
+                Dim dt As DataTable
                 If TypeOf DataGridView1.DataSource Is DataTable Then
                     dt = CType(DataGridView1.DataSource, DataTable)
                 ElseIf TypeOf DataGridView1.DataSource Is DataView Then
@@ -689,25 +499,27 @@ Public Class frmCluster
                 Else
                     Throw New InvalidOperationException("Unsupported DataSource type.")
                 End If
+                Dim row As DataRow = dt.NewRow
+                ' Populate the DataRow with values from the columns array
+                For i As Integer = 0 To columns.Length - 1
+                    If i < dt.Columns.Count Then
+                        row(i) = columns(i)
+                    End If
+                Next
+
+                ' check if row is old
+                If SpotIsOld(row) Then Return        ' ignore rows that are old
+
                 ' Check if the DataTable already contains the data
-                Dim rows As DataRow() = dt.Select($"Frequency='{columns(1)}' AND [DX Call]='{columns(2)}' AND Date='{columns(3)}' AND Time='{columns(4)}' AND Spotter='{columns(6)}'")
+                Dim rows As DataRow() = dt.Select($"Frequency='{row("Frequency")}' AND [DX Call]='{row("DX Call")}' AND Date='{row("Date")}' AND Time='{row("Time")}' AND Spotter='{row("Spotter")}'")
                 If rows.Length = 0 Then     ' it does not, so add
                     ' Check that the callsign is in the list. Sometimes some unasked for ones are present
-                    If CallList.Contains(columns(2)) Then
-                        Dim row As DataRow = dt.NewRow() ' Create a new DataRow
-                        ' Update the DataGridView with new data
-                        For i As Integer = 0 To columns.Length - 1 ' Loop through the columns
-                            If i < dt.Columns.Count Then
-                                row(i) = columns(i) ' Fill the DataRow with data
-                            End If
-                        Next
+                    If OpenWSIDialogs.ContainsKey(row("DX Call")) Then
                         row("Band") = FreqToBand(CSng(row("Frequency")))      ' create band column
                         row("Mode") = InferMode(CSng(row("Frequency")))      ' create mode column")
                         dt.Rows.Add(row) ' Add the new row to the DataTable
                     End If
                 End If
-                ' Apply the age filter
-                If Cluster.Client.Available < 3 Then ApplyAgeFilter(ComboBox1)  ' last in a burst of messages
                 DataGridView1.Refresh() ' Refresh the DataGridView to show the new data
             End If
         End If
@@ -728,59 +540,97 @@ Public Class frmCluster
             sender.Invoke(New Action(Of Object)(AddressOf ApplyAgeFilter), sender)
             Return
         End If
-        ' Check if the sender is a ComboBox and has a selected value
-        Dim selectedTimeSpan As TimeSpan
-        Dim cmb As ComboBox = CType(sender, ComboBox)
-        If cmb.SelectedValue IsNot Nothing Then
-            ' Handle the case where SelectedValue is a DataRowView
-            If TypeOf cmb.SelectedValue Is TimeSpan Then
-                selectedTimeSpan = CType(cmb.SelectedValue, TimeSpan)
-            ElseIf TypeOf cmb.SelectedItem Is DataRowView Then
-                Dim rowView As DataRowView = CType(cmb.SelectedItem, DataRowView)
-                selectedTimeSpan = CType(rowView("TimeSpanValue"), TimeSpan)
+
+        ' Delete any spots older than age
+
+        Dim dt As DataTable = GetDataTableFromDataGridView(DataGridView1)
+
+        ' Check if the DataTable is not null
+        If dt IsNot Nothing Then
+            ' Use a list to store rows to delete (to avoid modifying the collection while iterating)
+            Dim rowsToDelete As New List(Of DataRow)()
+
+            ' Iterate through the rows of the DataTable
+            For Each row As DataRow In dt.Rows
+                If SpotIsOld(row) Then rowsToDelete.Add(row)
+            Next
+
+            ' Remove the rows from the DataTable
+            For Each rowToDelete As DataRow In rowsToDelete
+                dt.Rows.Remove(rowToDelete)
+            Next
+            ' Sort the DataTable by Date and Time
+            dt.DefaultView.Sort = "Date DESC, Time DESC"
+            ' Refresh the DataGridView
+            DataGridView1.Refresh()
+        End If
+    End Sub
+
+    ''' <summary>
+    ''' Determines if a DataTable row is considered "old" based on the selected TimeSpan from ComboBox1.
+    ''' </summary>
+    ''' <param name="row">The DataTable row to evaluate.</param>
+    ''' <returns>True if the row is older than the cutoff DateTime; otherwise, False.</returns>
+    Private Function SpotIsOld(row As DataRow) As Boolean
+        Try
+            ' Validate combobox1's selected value
+            Dim selectedTimeSpan As TimeSpan
+            If ComboBox1.SelectedValue IsNot Nothing Then
+                If TypeOf ComboBox1.SelectedValue Is TimeSpan Then
+                    selectedTimeSpan = CType(ComboBox1.SelectedValue, TimeSpan)
+                ElseIf TypeOf ComboBox1.SelectedItem Is DataRowView Then
+                    Dim rowView As DataRowView = CType(ComboBox1.SelectedItem, DataRowView)
+                    selectedTimeSpan = CType(rowView("TimeSpanValue"), TimeSpan)
+                Else
+                    Debug.WriteLine("Error: Unable to extract TimeSpan from combobox1.SelectedValue.")
+                    Return False
+                End If
             Else
-                AppendTextSafe("Error: Unable to extract TimeSpan from SelectedValue." & vbCrLf)
-                Return
+                Debug.WriteLine("Error: combobox1.SelectedValue is null.")
+                Return False
             End If
-            ' Delete any spots older than age
 
             ' Calculate the cutoff DateTime
             Dim cutoffDateTime As DateTime = DateTime.UtcNow.Subtract(selectedTimeSpan)
 
-            Dim dt As DataTable = GetDataTableFromDataGridView(DataGridView1)
+            ' Validate and parse the row's Date and Time columns
+            If row.Table.Columns.Contains("Date") AndAlso row.Table.Columns.Contains("Time") Then
+                Dim rowDate As DateTime
+                Dim rowTime As TimeSpan
 
-            ' Check if the DataTable is not null
-            If dt IsNot Nothing Then
-                ' Use a list to store rows to delete (to avoid modifying the collection while iterating)
-                Dim rowsToDelete As New List(Of DataRow)()
+                ' Parse the Date column
+                If Not DateTime.TryParse(row("Date").ToString(), rowDate) Then
+                    Debug.WriteLine($"Error: Invalid Date value in row: {row("Date")}")
+                    Return False
+                End If
 
-                ' Iterate through the rows of the DataTable
-                For Each row As DataRow In dt.Rows
-                    ' Combine the Date and Time columns into a DateTime object
-                    Dim rowDate As DateTime = CType(row("Date"), DateTime)
-                    ' Extract hours and minutes
-                    Dim hours As Integer = Integer.Parse(row("Time").Substring(0, 2)) ' First 2 characters are hours
-                    Dim minutes As Integer = Integer.Parse(row("Time").Substring(2, 2)) ' Last 2 characters are minutes
-                    Dim rowTime = New TimeSpan(hours, minutes, 0)
+                ' Parse the Time column (assumes "HHmm" format)
+                Dim timeString As String = row("Time").ToString()
+                If Integer.TryParse(timeString.Substring(0, 2), Nothing) AndAlso
+               Integer.TryParse(timeString.Substring(2, 2), Nothing) Then
+                    Dim hours As Integer = Integer.Parse(timeString.Substring(0, 2))
+                    Dim minutes As Integer = Integer.Parse(timeString.Substring(2, 2))
+                    rowTime = New TimeSpan(hours, minutes, 0)
+                Else
+                    Debug.WriteLine($"Error: Invalid Time value in row: {row("Time")}")
+                    Return False
+                End If
 
-                    Dim rowDateTime As DateTime = rowDate.Add(rowTime)
+                ' Combine Date and Time into a single DateTime
+                Dim rowDateTime As DateTime = rowDate.Add(rowTime)
 
-                    ' Check if the row is older than the cutoff
-                    If rowDateTime < cutoffDateTime Then
-                        rowsToDelete.Add(row)
-                    End If
-                Next
-
-                ' Remove the rows from the DataTable
-                For Each rowToDelete As DataRow In rowsToDelete
-                    dt.Rows.Remove(rowToDelete)
-                Next
-
-                ' Refresh the DataGridView
-                DataGridView1.Refresh()
+                ' Check if the row is older than the cutoff
+                Return rowDateTime < cutoffDateTime
+            Else
+                Debug.WriteLine("Error: Row does not contain required 'Date' or 'Time' columns.")
+                Return False
             End If
-        End If
-    End Sub
+        Catch ex As Exception
+            Debug.WriteLine($"Error in SpotIsOld: {ex.Message}")
+            Return False
+        End Try
+    End Function
+
     ''' <summary>
     ''' Creates and returns a DataTable containing the structure and columns required for displaying DX cluster data.
     ''' This DataTable serves as the data source for the DataGridView in the frmCluster form.
@@ -995,6 +845,7 @@ Public Class frmCluster
             .Columns("Spotter Grid").Visible = False
             .Sort(DataGridView1.Columns("Date"), ListSortDirection.Descending)
             .Sort(DataGridView1.Columns("Time"), ListSortDirection.Descending)
+            ' Sort the DataTable by Date and Time
             .ColumnHeadersDefaultCellStyle.Font = New Font(DataGridView1.Font, FontStyle.Bold) ' Make the header row bold
             .Columns("Date").DefaultCellStyle.Format = "dd-MMM"
             ' Apply the display order
@@ -1005,7 +856,7 @@ Public Class frmCluster
             .Refresh()
         End With
 
-        GetOpenWSIDialogs() ' get list of open WSI dialogs
+        OpenWSIDialogs = GetOpenWSIDialogs() ' get list of open WSI dialogs
 
         PollingTimer = New Timers.Timer With {
             .AutoReset = True ' Ensure the timer repeats
@@ -1048,23 +899,10 @@ Public Class frmCluster
             checkBox.Checked = SelectedBands.Contains(checkBox.Name) ' check the boxes for the selected bands
         Next
 
-        ' Connect to the DX cluster server
-        Cluster.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, True)
-        Await Cluster.ConnectAsync(DXcluster, port).ConfigureAwait(False)
-        ' Ensure the connection is fully established
-        Thread.Sleep(1000)      ' wait for connection
-        If Not Cluster.Connected Then
-            AppendTextSafe("Error: Unable to connect to the cluster server." & vbCrLf)
-            Return
-        End If
-        ' Configure and start the BackgroundWorker
-        With Bgw
-            .WorkerSupportsCancellation = True
-            .WorkerReportsProgress = True
-            .RunWorkerAsync()
-        End With
-
         LoadSounds()    ' load list of sound files
+
+        ' Connect to the DX cluster server
+        Await InitializeCluster()
 
         ' Wait until the user is logged in
         While Not LoggedIn
@@ -1188,6 +1026,22 @@ Public Class frmCluster
     Private Sub btnClose_Click(sender As Object, e As EventArgs) Handles btnClose.Click
         Me.Close() ' Closes the form
     End Sub
+    ''' <summary>
+    ''' Handles the Closing event for the frmCluster form.
+    ''' Ensures that the ClusterManager is properly disposed of.
+    ''' </summary>
+    Private Sub frmCluster_Closing(sender As Object, e As CancelEventArgs) Handles MyBase.Closing
+        ' Dispose of the ClusterManager
+        clusterManager?.Dispose()
+
+        ' Stop the polling timer
+        If PollingTimer IsNot Nothing Then
+            PollingTimer.Stop()
+            PollingTimer.Dispose()
+        End If
+
+        Debug.WriteLine("frmCluster: Resources cleaned up on closing.")
+    End Sub
     Private Sub ComboBox3_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox3.SelectedIndexChanged
         InvokeIfRequired(ComboBox3, Sub()
                                         My.Settings.Alert = ComboBox3.SelectedItem.ToString() ' Save the selected value to settings
@@ -1197,3 +1051,217 @@ Public Class frmCluster
     End Sub
 #End Region
 End Class
+Public Class ClusterManager
+    Private Const ClusterHost As String = "hrd.wa9pie.net"
+    Private Const ClusterPort As Integer = 8000
+    Private Const LoginTimeout As Integer = 60 ' Timeout for login in seconds
+    Private Const CommandTimeout As Integer = 20 ' Timeout for commands in seconds
+    Private Const MaxRetries As Integer = 3 ' Maximum retries for login
+
+    Private ReadOnly ClusterClient As New TcpClient()
+    Private ReadOnly Buffer As New StringBuilder()
+
+    ''' <summary>
+    ''' Connects to the cluster and waits for the "login: " prompt.
+    ''' Retries up to MaxRetries times if the prompt is not received within the timeout.
+    ''' </summary>
+    ''' <returns>True if connected and "login: " received, False otherwise.</returns>
+    Public Async Function ConnectAsync() As Task(Of Boolean)
+        For attempt As Integer = 1 To MaxRetries
+            Try
+                Await ClusterClient.ConnectAsync(ClusterHost, ClusterPort)
+                If Await WaitForResponseAsync("login: ", LoginTimeout) Then
+                    Return True
+                End If
+            Catch ex As Exception
+                Debug.WriteLine($"Connection attempt {attempt} failed: {ex.Message}")
+            End Try
+
+            ' Retry logic
+            If attempt < MaxRetries Then
+                Debug.WriteLine($"Retrying connection... ({attempt}/{MaxRetries})")
+                Await Task.Delay(1000) ' Wait 1 second before retrying
+            End If
+        Next
+
+        Debug.WriteLine("Failed to connect to the cluster after maximum retries.")
+        Return False
+    End Function
+
+    ''' <summary>
+    ''' Sends a command to the DX cluster server and waits for a specific response.
+    ''' </summary>
+    ''' <param name="command">The command to send to the server.</param>
+    ''' <param name="EndOfCommand">The expected string that indicates the end of the server's response.</param>
+    ''' <returns>
+    ''' A task that represents the asynchronous operation. The task result contains the server's response as a string 
+    ''' if the expected response is received within the timeout; otherwise, an empty string.
+    ''' </returns>
+    ''' <remarks>
+    ''' This method sends a command to the server using a TCP connection and waits for the server's response.
+    ''' It ensures that the command is sent and the response is received within the specified timeout.
+    ''' If the response does not match the expected end string, an empty string is returned.
+    ''' </remarks>
+    ''' <exception cref="InvalidOperationException">Thrown if the command data is empty.</exception>
+    ''' <example>
+    ''' Example usage:
+    ''' <code>
+    ''' Dim response As String = Await clusterManager.SendCommandAsync("sh/dx", ">>")
+    ''' If Not String.IsNullOrEmpty(response) Then
+    '''     Console.WriteLine("Response received: " & response)
+    ''' Else
+    '''     Console.WriteLine("No response or timeout occurred.")
+    ''' End If
+    ''' </code>
+    ''' </example>
+    Public Async Function SendCommandAsync(command As String, Optional isMultiline As Boolean = False) As Task(Of String)
+        Try
+            ' Send the command
+            Dim data As Byte() = Encoding.ASCII.GetBytes(command)
+            ' Ensure the length is valid
+            If data.Length > 0 Then
+                Await ClusterClient.GetStream().WriteAsync(data, 0, data.Length)
+                AppendTextSafe(frmCluster.TextBox1, command) ' Append the command to the TextBox
+                Debug.WriteLine($"Command sent: {command}")
+            Else
+                Throw New InvalidOperationException("Command data is empty.")
+            End If
+            Await Task.Delay(500)   ' give cluster time to respond
+
+            ' Wait for the response based on whether multiline is expected
+            If isMultiline Then
+                Return Await WaitForMultiLineResponseAsync()
+            Else
+                If Await WaitForResponseAsync(vbCrLf, CommandTimeout) Then
+                    Return Buffer.ToString()
+                End If
+            End If
+
+        Catch ex As Exception
+            Debug.WriteLine($"Error sending command: {ex.Message}")
+        End Try
+
+        Return String.Empty
+    End Function
+
+    ''' <summary>
+    ''' Waits for a specific response from the cluster within the given timeout.
+    ''' </summary>
+    ''' <param name="expectedResponse">The expected response string.</param>
+    ''' <param name="timeoutInSeconds">The timeout in seconds.</param>
+    ''' <returns>True if the response is received, False otherwise.</returns>
+    Private Async Function WaitForResponseAsync(expectedResponse As String, timeoutInSeconds As Integer) As Task(Of Boolean)
+        Debug.WriteLine($"Waiting for response: {expectedResponse}")
+        Dim timeout As TimeSpan = TimeSpan.FromSeconds(timeoutInSeconds)
+        Dim startTime As DateTime = DateTime.Now
+
+        While DateTime.Now - startTime < timeout
+            If ClusterClient.Available > 0 Then
+                Dim byteBuffer(ClusterClient.Available - 1) As Byte
+                Dim bytesRead As Integer = Await ClusterClient.GetStream().ReadAsync(byteBuffer, 0, byteBuffer.Length)
+
+                ' Append the data to the StringBuilder
+                If bytesRead > 0 Then
+                    Dim receivedData = Encoding.ASCII.GetString(byteBuffer, 0, bytesRead)
+                    Buffer.Append(receivedData)
+                    AppendTextSafe(frmCluster.TextBox1, receivedData)
+                    Debug.WriteLine($"Received data: {receivedData}")
+
+                    ' Check if the expected response is received
+                    If Buffer.ToString().EndsWith(expectedResponse) Then
+                        Debug.WriteLine($"Expected response received: {Buffer}")
+                        Return True
+                    End If
+                End If
+            End If
+
+            Await Task.Delay(100) ' Check every 100ms
+        End While
+
+        Debug.WriteLine($"Timeout waiting for response: {expectedResponse}")
+        Return False
+    End Function
+
+    ''' <summary>
+    ''' Reads a multi-line response from the TCP stream until a period of inactivity is detected.
+    ''' </summary>
+    ''' <returns>
+    ''' A task that represents the asynchronous operation. The task result contains the complete 
+    ''' multi-line response as a single string.
+    ''' </returns>
+    ''' <remarks>
+    ''' This method continuously reads data from the TCP stream in chunks and appends it to a 
+    ''' <see cref="StringBuilder"/>. The method stops reading when no data is received for a 
+    ''' specified timeout period (1 second of inactivity).
+    ''' 
+    ''' Key features:
+    ''' - Handles multi-line responses from the server.
+    ''' - Uses a timeout to detect the end of the response.
+    ''' - Updates the UI with received data using <see cref="AppendTextSafe"/>.
+    ''' - Logs received data and the final response for debugging purposes.
+    ''' </remarks>
+    ''' <example>
+    ''' Example usage:
+    ''' <code>
+    ''' Dim response As String = Await WaitForMultiLineResponseAsync()
+    ''' If Not String.IsNullOrEmpty(response) Then
+    '''     Console.WriteLine("Response received: " & response)
+    ''' Else
+    '''     Console.WriteLine("No response or timeout occurred.")
+    ''' End If
+    ''' </code>
+    ''' </example>
+    Private Async Function WaitForMultiLineResponseAsync() As Task(Of String)
+        Dim timeout As TimeSpan = TimeSpan.FromSeconds(5) ' Timeout for inactivity
+        Dim startTime As DateTime = DateTime.Now
+        Dim responseBuilder As New StringBuilder()
+
+        Debug.WriteLine("Waiting for multi-line response")
+        Debug.Flush()
+
+        While True
+            ' Check if data is available
+            If ClusterClient.Available > 0 Then
+                Dim byteBuffer(ClusterClient.Available - 1) As Byte
+                Dim bytesRead As Integer = Await ClusterClient.GetStream().ReadAsync(byteBuffer, 0, byteBuffer.Length)
+
+                If bytesRead > 0 Then
+                    Dim receivedData = Encoding.ASCII.GetString(byteBuffer, 0, bytesRead)
+                    responseBuilder.Append(receivedData)
+                    AppendTextSafe(frmCluster.TextBox1, receivedData)
+                    Debug.WriteLine($"Received data chunk: {receivedData}")
+
+                    ' Reset the timeout since data was received
+                    startTime = DateTime.Now
+                End If
+            Else
+                ' Check for inactivity timeout
+                If DateTime.Now - startTime > timeout Then
+                    Debug.WriteLine("No more data received. Ending response collection.")
+                    Exit While
+                End If
+
+                Await Task.Delay(100) ' Wait briefly before checking again
+            End If
+        End While
+
+        Dim finalResponse = responseBuilder.ToString()
+        Return finalResponse
+    End Function
+
+
+    ''' <summary>
+    ''' Disposes of the ClusterManager resources, including closing the TCP connection.
+    ''' </summary>
+    Public Sub Dispose()
+        Try
+            If ClusterClient IsNot Nothing AndAlso ClusterClient.Connected Then
+                ClusterClient.Close()
+                Debug.WriteLine("ClusterManager: TCP connection closed.")
+            End If
+        Catch ex As Exception
+            Debug.WriteLine($"ClusterManager: Error during Dispose - {ex.Message}")
+        End Try
+    End Sub
+End Class
+
