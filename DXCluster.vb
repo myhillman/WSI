@@ -34,24 +34,22 @@ Public Class frmCluster
     Private OpenWSIDialogs As ConcurrentDictionary(Of String, Form) ' Dictionary to store open WSI dialogs
     Private soundPlayer As New SoundPlayerHelper()      ' Load the sound player
     Private clusterManager As New ClusterManager()
+    ' As the forms controls are not directly accessible, we need to use FindControlRecursive to get them
+    Private dgv1 As DataGridView, cmb1 As ComboBox, cmb2 As ComboBox, cmb3 As ComboBox, gb1 As GroupBox, txt1 As TextBox, txt2 As TextBox
 
     ''' <summary>
     ''' Saves the selected amateur bands to My.Settings whenever a checkbox is changed.
     ''' </summary>
     Private Sub SaveAmateurBands()
-        ' Find the GroupBox containing the checkboxes
-        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
-        If groupBox IsNot Nothing Then
-            ' Get all checked checkboxes in the GroupBox
-            Dim selectedBands = groupBox.Controls.OfType(Of CheckBox)().
+        ' Get all checked checkboxes in the GroupBox
+        Dim selectedBands = gb1.Controls.OfType(Of CheckBox)().
                             Where(Function(cb) cb.Checked).
                             Select(Function(cb) cb.Text).
                             ToList()
 
-            ' Save the selected bands as a comma-separated string in My.Settings
-            My.Settings.AmateurBands = String.Join(",", selectedBands)
-            My.Settings.Save()
-        End If
+        ' Save the selected bands as a comma-separated string in My.Settings
+        My.Settings.AmateurBands = String.Join(",", selectedBands)
+        My.Settings.Save()
     End Sub
 
 #Region "Initialization"
@@ -82,7 +80,7 @@ Public Class frmCluster
 
         ' Start the polling timer
         ' Update the polling interval
-        InvokeIfRequired(ComboBox2, AddressOf SetPollingInterval)
+        InvokeIfRequired(cmb2, AddressOf SetPollingInterval)
 
         ' Start the timer if not already running
         If Not PollingTimer.Enabled Then
@@ -96,7 +94,6 @@ Public Class frmCluster
     End Function
     Private Async Function SendClusterCommand(command As String) As Task
         Dim response = Await clusterManager.SendCommandAsync(command)
-        AppendTextSafe(TextBox1, response)
     End Function
 
     ''' <summary>
@@ -105,8 +102,8 @@ Public Class frmCluster
     ''' </summary>
     Private Sub SetPollingInterval()
         ' Validate and set the interval
-        If ComboBox2.SelectedValue IsNot Nothing AndAlso TypeOf ComboBox2.SelectedValue Is TimeSpan Then
-            Dim selectedTimeSpan As TimeSpan = CType(ComboBox2.SelectedValue, TimeSpan)
+        If cmb2.SelectedValue IsNot Nothing AndAlso TypeOf cmb2.SelectedValue Is TimeSpan Then
+            Dim selectedTimeSpan As TimeSpan = CType(cmb2.SelectedValue, TimeSpan)
             PollingTimer.Interval = selectedTimeSpan.TotalMilliseconds
             Debug.WriteLine($"Polling interval set to {PollingTimer.Interval / 1000} s.")
         Else
@@ -165,8 +162,7 @@ Public Class frmCluster
                 Next
             End If
         Next
-
-        ApplyAgeFilter(ComboBox1)  ' Apply the age filter
+        ApplyAgeFilter(cmb1)  ' Apply the age filter
     End Sub
     ''' <summary>
     ''' Ensures that the specified action is executed on the UI thread.
@@ -194,8 +190,6 @@ Public Class frmCluster
         End If
     End Sub
     Private Sub ProcessMessage(message As String)
-        ' Log the message to TextBox1
-        AppendTextSafe(TextBox1, $"<-- {message}{vbCrLf}")   ' display the message in the TextBox
         Debug.WriteLine($"Processing Message: {message}")
         ' Handle cluster data (e.g., CC11 format)
         If message.Contains("^"c) Then
@@ -375,17 +369,13 @@ Public Class frmCluster
     ''' </summary>
     Private Sub UpdateDataGridViewFilter()
         SaveAmateurBands() ' Save the selected bands to settings
-        ' Get the "Amateur Bands" group box
-        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
-        If groupBox Is Nothing Then Return ' Exit if the group box is not found
-
         ' Get the list of checked bands
-        Dim checkedBands = groupBox.Controls.OfType(Of CheckBox)().
+        Dim checkedBands = gb1.Controls.OfType(Of CheckBox)().
                        Where(Function(cb) cb.Checked).
                        Select(Function(cb) cb.Text).
                        ToList()
         ' Get the DataTable from the DataGridView's DataSource
-        Dim dt As DataTable = GetDataTableFromDataGridView(DataGridView1)
+        Dim dt As DataTable = GetDataTableFromDataGridView(dgv1)
         If dt IsNot Nothing Then
             dt.DefaultView.RowFilter = String.Join(" OR ", checkedBands.Select(Function(b) $"{BandColumnName} = '{b}'"))
         End If
@@ -410,13 +400,8 @@ Public Class frmCluster
     ''' </remarks>
 
     Private Sub DataGridView1_RowPrePaint(sender As Object, e As DataGridViewRowPrePaintEventArgs) Handles DataGridView1.RowPrePaint
-        Dim dgv As DataGridView = CType(sender, DataGridView)
         ' Get the current row
-        Dim row As DataGridViewRow = dgv.Rows(e.RowIndex)
-
-        ' Get the "Amateur Bands" group box
-        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
-        If groupBox Is Nothing Then Return ' Exit if the group box is not found
+        Dim row As DataGridViewRow = dgv1.Rows(e.RowIndex)
 
         ' Get the band value from the current row
         Dim band As String = row.Cells("Band").Value?.ToString()
@@ -425,54 +410,93 @@ Public Class frmCluster
         If Not OpenWSIDialogs.IsEmpty Then
             Dim wsiDialog = OpenWSIDialogs(row.Cells("DX Call").Value)    ' get WSI dialog for this call
             If wsiDialog IsNot Nothing Then
-                Dim dgv1 = CType(FindControlRecursive(wsiDialog.Controls(0), "DataGridView1"), DataGridView)    ' find the DataGridView control
-                If dgv1 Is Nothing Then
-                    Throw New Exception($"Could not locate DataGridView1 in {wsiDialog.Name}")
-                Else
-                    If dgv1.DataSource IsNot Nothing Then
-                        ' Get the DataTable from wsi form DataGridView1.DataSource
-                        Dim dt As DataTable = TryCast(dgv1.DataSource, DataTable)
+                Dim dgv = CType(wsiDialog.Controls.Find("DataGridView1", True).FirstOrDefault(), DataGridView) ' find DataGridView1
+                ' in WSI dialog
+                If dgv.DataSource IsNot Nothing Then
+                    ' Get the DataTable from wsi form DataGridView1.DataSource
+                    Dim dt As DataTable = TryCast(dgv.DataSource, DataTable)
 
-                        ' if column exists, and it is not empty, then we've had a contact on ths slot
-                        Dim ColumnName = $"BAND_{band}"
-                        If Not dt.Columns.Contains(ColumnName) OrElse
+                    ' if column exists, and it is not empty, then we've had a contact on ths slot
+                    Dim ColumnName = $"BAND_{band}"
+                    If Not dt.Columns.Contains(ColumnName) OrElse
                            dt.Rows.Count = 0 OrElse
                            String.IsNullOrEmpty(dt.Rows(0)(ColumnName)?.ToString()) Then
-                            ' Highlight the row if no contact on this band
-                            row.DefaultCellStyle.BackColor = Color.LightGreen
-                            ' Play a sound to indicate a new spot
-                            If Not soundPlayer.IsSoundPlaying Then
-                                soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays a notification sound
-                            End If
-                        Else
-                            ' Reset the background color if previous contact on this band
-                            row.DefaultCellStyle.BackColor = Color.White
+                        ' Highlight the row if no contact on this band
+                        row.DefaultCellStyle.BackColor = Color.LightGreen
+                        ' Play a sound to indicate a new spot
+                        If Not soundPlayer.IsSoundPlaying Then
+                            soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays a notification sound
                         End If
+                    Else
+                        ' Reset the background color if previous contact on this band
+                        row.DefaultCellStyle.BackColor = Color.White
                     End If
                 End If
             End If
         End If
     End Sub
-    ''' <summary>
-    ''' Recursively searches for a control with the specified name within a parent control's hierarchy.
-    ''' </summary>
-    ''' <param name="parent">The parent control to start the search from.</param>
-    ''' <param name="name">The name of the control to search for.</param>
-    ''' <returns>
-    ''' The control with the specified name if found; otherwise, Nothing.
-    ''' </returns>
-    ''' <remarks>
-    ''' This method is useful for locating controls that may be nested within containers 
-    ''' (e.g., Panels, GroupBoxes) and are not directly accessible from the top-level Controls collection.
-    ''' </remarks>
-    Private Function FindControlRecursive(parent As Control, name As String) As Control
-        For Each ctrl As Control In parent.Controls
-            If ctrl.Name = name Then Return ctrl
-            Dim found = FindControlRecursive(ctrl, name)
-            If found IsNot Nothing Then Return found
+
+    Private Sub DisplayControlHierarchy(parent As Control, Optional indent As String = "")
+        ' Print the current control's name and type
+        Debug.WriteLine($"{indent}{parent.Name} ({parent.GetType().Name})")
+
+        ' Recursively display child controls
+        For Each child As Control In parent.Controls
+            DisplayControlHierarchy(child, indent & "  ") ' Increase indentation for child controls
         Next
-        Return Nothing
-    End Function
+    End Sub
+
+    ''' <summary>
+    ''' Handles the CellMouseEnter event for DataGridView1.
+    ''' Highlights the cell in the "Band" column of the hovered row by setting its background color to yellow.
+    ''' </summary>
+    ''' <param name="sender">The DataGridView control that triggered the event.</param>
+    ''' <param name="e">Provides data for the CellMouseEnter event, including the row and column indices of the hovered cell.</param>
+    ''' <remarks>
+    ''' This method ensures that only the cell in the "Band" column of the hovered row is highlighted.
+    ''' It checks if the hovered cell belongs to the "Band" column before applying the highlight.
+    ''' </remarks>
+
+    Private Sub DataGridView1_CellMouseEnter(sender As Object, e As DataGridViewCellEventArgs) Handles DataGridView1.CellMouseEnter
+        FormatHighlight(sender, e, Color.Yellow)
+    End Sub
+
+    Private Sub DataGridView1_CellMouseLeave(sender As Object, e As DataGridViewCellEventArgs) Handles DataGridView1.CellMouseLeave
+        ' Ensure the mouse is over a valid row and column
+        FormatHighlight(sender, e, Color.Empty)     ' original background
+    End Sub
+
+    Dim HighlightedColumns As New List(Of String) From {"DX Call", "Frequency", "Band", "Mode", "Spotter"}     ' list of columns with highlighting
+    ''' <summary>
+    ''' Highlights or resets the background color of cells in a DataGridView column 
+    ''' based on matching values in the specified column and the "DX Call" column.
+    ''' </summary>
+    ''' <param name="sender">The DataGridView control that triggered the event.</param>
+    ''' <param name="e">Provides data for the DataGridView cell event, including the row and column indices of the cell.</param>
+    ''' <param name="color">The color to apply to the matching cells. Use Color.White to reset the background color.</param>
+    ''' <remarks>
+    ''' This method checks if the hovered cell belongs to a highlighted column (e.g., "DX Call", "Band", or "Spotter").
+    ''' If it does, it highlights all cells in the same column and row that match the hovered cell's value and "DX Call".
+    ''' </remarks>
+
+    Private Sub FormatHighlight(sender As Object, e As DataGridViewCellEventArgs, color As Color)
+        If e.RowIndex >= 0 AndAlso e.ColumnIndex >= 0 Then
+            Dim dgv As DataGridView = CType(sender, DataGridView)
+            If HighlightedColumns.Contains(dgv.Columns(e.ColumnIndex).Name) Then    ' it's a highlighted column
+                Dim currentRow As DataGridViewRow = dgv.Rows(e.RowIndex)
+                ' Get the Band and DX Call values of the current row
+                Dim dxCall As String = currentRow.Cells("DX Call").Value?.ToString()
+                Dim HighlightedCell As String = currentRow.Cells(e.ColumnIndex).Value?.ToString()
+
+                ' Highlight all cells in the same Band and DX Call
+                For Each row As DataGridViewRow In dgv.Rows
+                    If row.Cells("DX Call").Value?.ToString() = dxCall AndAlso row.Cells(e.ColumnIndex).Value?.ToString() = HighlightedCell Then
+                        row.Cells(e.ColumnIndex).Style.BackColor = color
+                    End If
+                Next
+            End If
+        End If
+    End Sub
     ''' <summary>
     ''' Parses and processes cluster data received from the DX cluster server.
     ''' Updates the DataGridView with new data if the received data is valid and not already present.
@@ -485,17 +509,17 @@ Public Class frmCluster
     ''' The method ensures thread safety by invoking updates on the UI thread if required.
     ''' </remarks>
     Private Sub ParseClusterData(data As String)
-        If Me.DataGridView1.InvokeRequired Then
-            Me.DataGridView1.Invoke(New Action(Of String)(AddressOf ParseClusterData), data)
+        If dgv1.InvokeRequired Then
+            dgv1.Invoke(New Action(Of String)(AddressOf ParseClusterData), data)
         Else
             data = data.Trim(vbCr, vbLf)    ' remove rubbish
             Dim columns As String() = data.Split("^"c) ' Split the string into columns
             If columns(0) = "CC11" Then     ' it's a cluster message
                 Dim dt As DataTable
-                If TypeOf DataGridView1.DataSource Is DataTable Then
-                    dt = CType(DataGridView1.DataSource, DataTable)
-                ElseIf TypeOf DataGridView1.DataSource Is DataView Then
-                    dt = CType(CType(DataGridView1.DataSource, DataView).Table, DataTable)
+                If TypeOf dgv1.DataSource Is DataTable Then
+                    dt = CType(dgv1.DataSource, DataTable)
+                ElseIf TypeOf dgv1.DataSource Is DataView Then
+                    dt = CType(CType(dgv1.DataSource, DataView).Table, DataTable)
                 Else
                     Throw New InvalidOperationException("Unsupported DataSource type.")
                 End If
@@ -511,19 +535,41 @@ Public Class frmCluster
                 If SpotIsOld(row) Then Return        ' ignore rows that are old
 
                 ' Check if the DataTable already contains the data
-                Dim rows As DataRow() = dt.Select($"Frequency='{row("Frequency")}' AND [DX Call]='{row("DX Call")}' AND Date='{row("Date")}' AND Time='{row("Time")}' AND Spotter='{row("Spotter")}'")
+                Dim rows As DataRow() = dt.Select($"Frequency='{row("Frequency")}' AND [DX Call]='{row("DX Call")}' AND Date='{row("Date")}' AND Time='{row("Time").tolower}' AND Spotter='{row("Spotter")}'")
                 If rows.Length = 0 Then     ' it does not, so add
                     ' Check that the callsign is in the list. Sometimes some unasked for ones are present
                     If OpenWSIDialogs.ContainsKey(row("DX Call")) Then
                         row("Band") = FreqToBand(CSng(row("Frequency")))      ' create band column
                         row("Mode") = InferMode(CSng(row("Frequency")))      ' create mode column")
+                        row("Time") = row("Time").tolower()           ' 
                         dt.Rows.Add(row) ' Add the new row to the DataTable
                     End If
                 End If
-                DataGridView1.Refresh() ' Refresh the DataGridView to show the new data
+                ResizeForm() ' Resize the form to fit the new data
+                dgv1.Refresh() ' Refresh the DataGridView to show the new data
             End If
         End If
     End Sub
+    ''' <summary>
+    ''' Dynamically resizes the form to fit the combined dimensions of the TableLayoutPanel and DataGridView.
+    ''' </summary>
+    ''' <remarks>
+    ''' This method calculates the total height and width of the rows and columns in the TableLayoutPanel,
+    ''' adds the dimensions of the DataGridView, and adjusts the form's size accordingly.
+    ''' It ensures that the form accommodates all its child controls without clipping.
+    ''' </remarks>
+    Sub ResizeForm()
+        With dgv1
+            .AutoResizeColumns(DataGridViewAutoSizeColumnsMode.AllCells)
+            .AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells)
+            .Refresh()
+        End With
+        Dim height = TableLayoutPanel1.GetRowHeights().Sum() + SystemInformation.CaptionHeight '+ DataGridView1.Height
+        Dim width = TableLayoutPanel1.GetColumnWidths().Sum() '+ DataGridView1.Width
+        Dim newSize = New Size(width, height)
+        Me.Size = newSize
+    End Sub
+
     ''' <summary>
     ''' Filters the rows in the DataGridView's underlying DataTable based on the selected TimeSpan from the ComboBox.
     ''' Removes rows where the combined Date and Time values are older than the calculated cutoff DateTime.
@@ -542,8 +588,7 @@ Public Class frmCluster
         End If
 
         ' Delete any spots older than age
-
-        Dim dt As DataTable = GetDataTableFromDataGridView(DataGridView1)
+        Dim dt As DataTable = GetDataTableFromDataGridView(dgv1)
 
         ' Check if the DataTable is not null
         If dt IsNot Nothing Then
@@ -562,7 +607,8 @@ Public Class frmCluster
             ' Sort the DataTable by Date and Time
             dt.DefaultView.Sort = "Date DESC, Time DESC"
             ' Refresh the DataGridView
-            DataGridView1.Refresh()
+            ResizeForm() ' Resize the form to fit the new data
+            dgv1.Refresh()
         End If
     End Sub
 
@@ -573,20 +619,20 @@ Public Class frmCluster
     ''' <returns>True if the row is older than the cutoff DateTime; otherwise, False.</returns>
     Private Function SpotIsOld(row As DataRow) As Boolean
         Try
-            ' Validate combobox1's selected value
+            ' Validate ComboBox1's selected value
             Dim selectedTimeSpan As TimeSpan
-            If ComboBox1.SelectedValue IsNot Nothing Then
-                If TypeOf ComboBox1.SelectedValue Is TimeSpan Then
-                    selectedTimeSpan = CType(ComboBox1.SelectedValue, TimeSpan)
-                ElseIf TypeOf ComboBox1.SelectedItem Is DataRowView Then
-                    Dim rowView As DataRowView = CType(ComboBox1.SelectedItem, DataRowView)
+            If cmb1.SelectedValue IsNot Nothing Then
+                If TypeOf cmb1.SelectedValue Is TimeSpan Then
+                    selectedTimeSpan = CType(cmb1.SelectedValue, TimeSpan)
+                ElseIf TypeOf cmb1.SelectedItem Is DataRowView Then
+                    Dim rowView As DataRowView = CType(cmb1.SelectedItem, DataRowView)
                     selectedTimeSpan = CType(rowView("TimeSpanValue"), TimeSpan)
                 Else
-                    Debug.WriteLine("Error: Unable to extract TimeSpan from combobox1.SelectedValue.")
+                    Debug.WriteLine("Error: Unable to extract TimeSpan from ComboBox1.SelectedValue.")
                     Return False
                 End If
             Else
-                Debug.WriteLine("Error: combobox1.SelectedValue is null.")
+                Debug.WriteLine("Error: ComboBox1.SelectedValue is null.")
                 Return False
             End If
 
@@ -606,8 +652,8 @@ Public Class frmCluster
 
                 ' Parse the Time column (assumes "HHmm" format)
                 Dim timeString As String = row("Time").ToString()
-                If Integer.TryParse(timeString.Substring(0, 2), Nothing) AndAlso
-               Integer.TryParse(timeString.Substring(2, 2), Nothing) Then
+                If Integer.TryParse(timeString.AsSpan(0, 2), Nothing) AndAlso
+               Integer.TryParse(timeString.AsSpan(2, 2), Nothing) Then
                     Dim hours As Integer = Integer.Parse(timeString.Substring(0, 2))
                     Dim minutes As Integer = Integer.Parse(timeString.Substring(2, 2))
                     rowTime = New TimeSpan(hours, minutes, 0)
@@ -736,6 +782,8 @@ Public Class frmCluster
             .Rows.Add("1 hr", TimeSpan.FromHours(1))
             .Rows.Add("3 hrs", TimeSpan.FromHours(3))
             .Rows.Add("6 hrs", TimeSpan.FromHours(6))
+            .Rows.Add("12 hrs", TimeSpan.FromHours(12))
+            .Rows.Add("24 hrs", TimeSpan.FromHours(24))
         End With
         Return table
     End Function
@@ -788,12 +836,12 @@ Public Class frmCluster
     ''' </remarks>
     Public Sub ApplyUpdateInterval(sender As Object)
         ' Ensure cross-thread protection
-        If ComboBox2.InvokeRequired Then
-            ComboBox2.Invoke(New Action(Of Object)(AddressOf ApplyUpdateInterval), sender)
+        If cmb2.InvokeRequired Then
+            cmb2.Invoke(New Action(Of Object)(AddressOf ApplyUpdateInterval), sender)
             Return
         End If
 
-        InvokeIfRequired(ComboBox2, AddressOf SetPollingInterval)
+        InvokeIfRequired(cmb2, AddressOf SetPollingInterval)
         PollCluster()       ' poll cluster when update interval is changed
     End Sub
 #End Region
@@ -824,12 +872,38 @@ Public Class frmCluster
     Private Async Sub frmCluster_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         ' Create data source
 
+        ' Display the control hierarchy in the Debug output
+        Debug.WriteLine("Control Hierarchy of frmCluster:")
+        DisplayControlHierarchy(Me)
+        ' Find controls
+        'dgv1 = CType(FindControlRecursive(Me, "DataGridView1"), DataGridView)
+        'cmb1 = CType(FindControlRecursive(Me, "ComboBox1"), ComboBox)
+        'cmb2 = CType(FindControlRecursive(Me, "ComboBox2"), ComboBox)
+        'cmb3 = CType(FindControlRecursive(Me, "ComboBox3"), ComboBox)
+        'gb1 = CType(FindControlRecursive(Me, "GroupBox1"), GroupBox)
+        'txt1 = CType(FindControlRecursive(Me, "TextBox1"), TextBox)
+        Try
+            dgv1 = CType(DataGridView1, DataGridView)
+            cmb1 = CType(ComboBox1, ComboBox)
+            cmb2 = CType(ComboBox2, ComboBox)
+            cmb3 = CType(ComboBox3, ComboBox)
+            gb1 = CType(GroupBox1, GroupBox)
+            txt1 = CType(TextBox1, TextBox)
+        Catch ex As Exception
+            Debug.WriteLine($"Error finding controls: {ex.Message}")
+            Return
+        End Try
+
         Dim DisplayOrder() As String = {"CC11", "DX Call", "Frequency", "Band", "Mode", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid"}    ' the order the columns are displayed
-        With DataGridView1
+
+        With dgv1
             .AutoGenerateColumns = True
-            .RowHeadersVisible = False      ' hide the Select column
-            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
-            .DataSource = GetDataSource()   ' Bind the data source
+            .RowHeadersVisible = False ' Hide the row headers if not needed
+            .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells ' Auto-size columns to fit content
+            .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells ' Auto-size rows to fit content
+            .ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize ' Auto-size column headers
+            .RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders ' Auto-size row headers
+            .DataSource = GetDataSource() ' Bind the data source
             ' Hide uninteresting columns
             .Columns("CC11").Visible = False
             .Columns("Entity").Visible = False
@@ -843,16 +917,27 @@ Public Class frmCluster
             .Columns("DX State").Visible = False
             .Columns("Spotter Country").Visible = False
             .Columns("Spotter Grid").Visible = False
-            .Sort(DataGridView1.Columns("Date"), ListSortDirection.Descending)
-            .Sort(DataGridView1.Columns("Time"), ListSortDirection.Descending)
+            .Sort(dgv1.Columns("Date"), ListSortDirection.Descending)
+            .Sort(dgv1.Columns("Time"), ListSortDirection.Descending)
             ' Sort the DataTable by Date and Time
-            .ColumnHeadersDefaultCellStyle.Font = New Font(DataGridView1.Font, FontStyle.Bold) ' Make the header row bold
+            .ColumnHeadersDefaultCellStyle.Font = New Font(dgv1.Font, FontStyle.Bold) ' Make the header row bold
             .Columns("Date").DefaultCellStyle.Format = "dd-MMM"
             ' Apply the display order
             If DisplayOrder.Length <> .DataSource.columns.count Then Throw New Exception("There needs to be 1 entry in DisplayOrder for every column in the datasource")
             For i As Integer = 0 To DisplayOrder.Length - 1
                 .Columns(DisplayOrder(i)).DisplayIndex = i
             Next
+
+            ' Ensure TableLayoutPanel allows resizing
+            TableLayoutPanel1.RowStyles(1).SizeType = SizeType.AutoSize
+            TableLayoutPanel1.ColumnStyles(0).SizeType = SizeType.AutoSize
+
+            ' Force auto-resize after data binding
+            For Each column As DataGridViewColumn In dgv1.Columns
+                column.Width = -1 ' Reset to default
+            Next
+            dgv1.AutoResizeColumns(DataGridViewAutoSizeColumnsMode.AllCells)
+            dgv1.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells)
             .Refresh()
         End With
 
@@ -864,38 +949,37 @@ Public Class frmCluster
         AddHandler PollingTimer.Elapsed, AddressOf OnPollingTimerElapsed
 
         ' Temporarily remove the event handlers
-        RemoveHandler ComboBox1.SelectedIndexChanged, AddressOf ComboBox1_SelectedIndexChanged
-        RemoveHandler ComboBox2.SelectedIndexChanged, AddressOf ComboBox2_SelectedIndexChanged
+        RemoveHandler cmb1.SelectedIndexChanged, AddressOf ComboBox1_SelectedIndexChanged
+        RemoveHandler cmb2.SelectedIndexChanged, AddressOf ComboBox2_SelectedIndexChanged
         ' Create the Age drop down
-        BindTimeSpanComboBox(ComboBox1, AddressOf GetAgeSpanDataSource)
+        BindTimeSpanComboBox(cmb1, AddressOf GetAgeSpanDataSource)
         ' Set the default value for ComboBox1
         Dim valueToSelect As String = My.Settings.Age
-        Dim Index As Integer = ComboBox1.FindStringExact(valueToSelect)
+        Dim Index As Integer = cmb1.FindStringExact(valueToSelect)
         If Index >= 0 Then
-            ComboBox1.SelectedIndex = Index
+            cmb1.SelectedIndex = Index
         Else
             Throw New Exception($"Value '{valueToSelect}' not found in ComboBox1.")
         End If
 
         ' Create the Update drop down
-        BindTimeSpanComboBox(ComboBox2, AddressOf GetUpdateSpanDataSource)
+        BindTimeSpanComboBox(cmb2, AddressOf GetUpdateSpanDataSource)
         ' Set the default value for ComboBox2
         valueToSelect = My.Settings.Update
-        Index = ComboBox2.FindStringExact(valueToSelect)
+        Index = cmb2.FindStringExact(valueToSelect)
         If Index >= 0 Then
-            ComboBox2.SelectedIndex = Index
+            cmb2.SelectedIndex = Index
         Else
             Throw New Exception($"Value '{valueToSelect}' not found in ComboBox2.")
         End If
         ' Reattach the event handlers
-        AddHandler ComboBox1.SelectedIndexChanged, AddressOf ComboBox1_SelectedIndexChanged
-        AddHandler ComboBox2.SelectedIndexChanged, AddressOf ComboBox2_SelectedIndexChanged
+        AddHandler cmb1.SelectedIndexChanged, AddressOf ComboBox1_SelectedIndexChanged
+        AddHandler cmb2.SelectedIndexChanged, AddressOf ComboBox2_SelectedIndexChanged
 
         AddBandCheckboxes()
         Dim SelectedBands = GetAmateurBandSettings() ' get the amateur band settings
-        Dim groupBox = Me.Controls.OfType(Of GroupBox)().FirstOrDefault(Function(g) g.Text = AmateurBandsGroupBoxText)
         ' Set the Checked property of each CheckBox based on the selected bands
-        For Each checkBox In groupBox.Controls.OfType(Of CheckBox)()
+        For Each checkBox In gb1.Controls.OfType(Of CheckBox)()
             checkBox.Checked = SelectedBands.Contains(checkBox.Name) ' check the boxes for the selected bands
         Next
 
@@ -924,27 +1008,29 @@ Public Class frmCluster
     ''' This method ensures that the alert sound selection is properly initialized and prevents unnecessary event handling during setup.
     ''' </remarks>
     Sub LoadSounds()
-        If ComboBox3.InvokeRequired Then
-            ComboBox3.Invoke(New Action(AddressOf LoadSounds))
+        If cmb3.InvokeRequired Then
+            cmb3.Invoke(New Action(AddressOf LoadSounds))
             Return
         End If
         ' Load alert sounds
         Dim sounds As List(Of String) = soundPlayer.GetWavFiles()
-        ComboBox3.DataSource = sounds
+
         ' Temporarily remove the event handler
-        RemoveHandler ComboBox3.SelectedIndexChanged, AddressOf ComboBox3_SelectedIndexChanged
+        RemoveHandler cmb3.SelectedIndexChanged, AddressOf ComboBox3_SelectedIndexChanged
+
         ' Update the DataSource
+        cmb3.DataSource = sounds
 
         Dim alertSound As String = My.Settings.Alert
-        Dim alertIndex As Integer = ComboBox3.FindStringExact(alertSound)    ' select current alert
+        Dim alertIndex As Integer = cmb3.FindStringExact(alertSound)    ' select current alert
         If alertIndex >= 0 Then
-            ComboBox3.SelectedIndex = alertIndex ' Select the matching entry
+            cmb3.SelectedIndex = alertIndex ' Select the matching entry
         Else
             MessageBox.Show($"Alert sound '{alertSound}' not found in the list. Defaulting to the first entry.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information)
-            ComboBox3.SelectedIndex = 0 ' Default to the first entry if no match is found
+            cmb3.SelectedIndex = 0 ' Default to the first entry if no match is found
         End If
         ' Reattach the event handler
-        AddHandler ComboBox3.SelectedIndexChanged, AddressOf ComboBox3_SelectedIndexChanged
+        AddHandler cmb3.SelectedIndexChanged, AddressOf ComboBox3_SelectedIndexChanged
     End Sub
     ''' <summary>
     ''' Dynamically adds a group of checkboxes to the form, one for each amateur radio band.
@@ -958,19 +1044,6 @@ Public Class frmCluster
     ''' </remarks>
     Private Sub AddBandCheckboxes()
         ' Create a GroupBox to hold the checkboxes
-        ' Calculate location for groupbox, just below the Update interval
-        Dim location = Me.ComboBox2.Location
-        location.Y += 40
-        ' Create groupbox
-        Dim groupBox As New GroupBox With {
-        .Text = AmateurBandsGroupBoxText,
-        .Location = location,
-        .AutoSize = True,
-        .Margin = New Padding(10)
-    }
-
-        ' Add the GroupBox to the form
-        Me.Controls.Add(groupBox)
 
         ' Dynamically create checkboxes for each band
         Dim xOffset As Integer = 10 ' Initial horizontal offset
@@ -993,7 +1066,7 @@ Public Class frmCluster
             AddHandler checkBox.CheckedChanged, Sub(sender, e) UpdateDataGridViewFilter()
 
             ' Add the checkbox to the GroupBox
-            groupBox.Controls.Add(checkBox)
+            GroupBox1.Controls.Add(checkBox)
 
             ' Update the position for the next checkbox
             currentRow += 1
@@ -1043,225 +1116,16 @@ Public Class frmCluster
         Debug.WriteLine("frmCluster: Resources cleaned up on closing.")
     End Sub
     Private Sub ComboBox3_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox3.SelectedIndexChanged
-        InvokeIfRequired(ComboBox3, Sub()
-                                        My.Settings.Alert = ComboBox3.SelectedItem.ToString() ' Save the selected value to settings
-                                        My.Settings.Save()
-                                        soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays the selected alert sound
-                                    End Sub)
+        SaveSound(sender)
+    End Sub
+    Private Sub SaveSound(sender As Object)
+        If sender.InvokeRequired Then
+            sender.Invoke(New Action(Of Object)(AddressOf SaveSound))
+        Else
+            My.Settings.Alert = sender.SelectedItem.ToString() ' Save the selected value to settings
+            My.Settings.Save()
+            soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays the selected alert sound
+        End If
     End Sub
 #End Region
 End Class
-Public Class ClusterManager
-    Private Const ClusterHost As String = "hrd.wa9pie.net"
-    Private Const ClusterPort As Integer = 8000
-    Private Const LoginTimeout As Integer = 60 ' Timeout for login in seconds
-    Private Const CommandTimeout As Integer = 20 ' Timeout for commands in seconds
-    Private Const MaxRetries As Integer = 3 ' Maximum retries for login
-
-    Private ReadOnly ClusterClient As New TcpClient()
-    Private ReadOnly Buffer As New StringBuilder()
-
-    ''' <summary>
-    ''' Connects to the cluster and waits for the "login: " prompt.
-    ''' Retries up to MaxRetries times if the prompt is not received within the timeout.
-    ''' </summary>
-    ''' <returns>True if connected and "login: " received, False otherwise.</returns>
-    Public Async Function ConnectAsync() As Task(Of Boolean)
-        For attempt As Integer = 1 To MaxRetries
-            Try
-                Await ClusterClient.ConnectAsync(ClusterHost, ClusterPort)
-                If Await WaitForResponseAsync("login: ", LoginTimeout) Then
-                    Return True
-                End If
-            Catch ex As Exception
-                Debug.WriteLine($"Connection attempt {attempt} failed: {ex.Message}")
-            End Try
-
-            ' Retry logic
-            If attempt < MaxRetries Then
-                Debug.WriteLine($"Retrying connection... ({attempt}/{MaxRetries})")
-                Await Task.Delay(1000) ' Wait 1 second before retrying
-            End If
-        Next
-
-        Debug.WriteLine("Failed to connect to the cluster after maximum retries.")
-        Return False
-    End Function
-
-    ''' <summary>
-    ''' Sends a command to the DX cluster server and waits for a specific response.
-    ''' </summary>
-    ''' <param name="command">The command to send to the server.</param>
-    ''' <param name="EndOfCommand">The expected string that indicates the end of the server's response.</param>
-    ''' <returns>
-    ''' A task that represents the asynchronous operation. The task result contains the server's response as a string 
-    ''' if the expected response is received within the timeout; otherwise, an empty string.
-    ''' </returns>
-    ''' <remarks>
-    ''' This method sends a command to the server using a TCP connection and waits for the server's response.
-    ''' It ensures that the command is sent and the response is received within the specified timeout.
-    ''' If the response does not match the expected end string, an empty string is returned.
-    ''' </remarks>
-    ''' <exception cref="InvalidOperationException">Thrown if the command data is empty.</exception>
-    ''' <example>
-    ''' Example usage:
-    ''' <code>
-    ''' Dim response As String = Await clusterManager.SendCommandAsync("sh/dx", ">>")
-    ''' If Not String.IsNullOrEmpty(response) Then
-    '''     Console.WriteLine("Response received: " & response)
-    ''' Else
-    '''     Console.WriteLine("No response or timeout occurred.")
-    ''' End If
-    ''' </code>
-    ''' </example>
-    Public Async Function SendCommandAsync(command As String, Optional isMultiline As Boolean = False) As Task(Of String)
-        Try
-            ' Send the command
-            Dim data As Byte() = Encoding.ASCII.GetBytes(command)
-            ' Ensure the length is valid
-            If data.Length > 0 Then
-                Await ClusterClient.GetStream().WriteAsync(data, 0, data.Length)
-                AppendTextSafe(frmCluster.TextBox1, command) ' Append the command to the TextBox
-                Debug.WriteLine($"Command sent: {command}")
-            Else
-                Throw New InvalidOperationException("Command data is empty.")
-            End If
-            Await Task.Delay(500)   ' give cluster time to respond
-
-            ' Wait for the response based on whether multiline is expected
-            If isMultiline Then
-                Return Await WaitForMultiLineResponseAsync()
-            Else
-                If Await WaitForResponseAsync(vbCrLf, CommandTimeout) Then
-                    Return Buffer.ToString()
-                End If
-            End If
-
-        Catch ex As Exception
-            Debug.WriteLine($"Error sending command: {ex.Message}")
-        End Try
-
-        Return String.Empty
-    End Function
-
-    ''' <summary>
-    ''' Waits for a specific response from the cluster within the given timeout.
-    ''' </summary>
-    ''' <param name="expectedResponse">The expected response string.</param>
-    ''' <param name="timeoutInSeconds">The timeout in seconds.</param>
-    ''' <returns>True if the response is received, False otherwise.</returns>
-    Private Async Function WaitForResponseAsync(expectedResponse As String, timeoutInSeconds As Integer) As Task(Of Boolean)
-        Debug.WriteLine($"Waiting for response: {expectedResponse}")
-        Dim timeout As TimeSpan = TimeSpan.FromSeconds(timeoutInSeconds)
-        Dim startTime As DateTime = DateTime.Now
-
-        While DateTime.Now - startTime < timeout
-            If ClusterClient.Available > 0 Then
-                Dim byteBuffer(ClusterClient.Available - 1) As Byte
-                Dim bytesRead As Integer = Await ClusterClient.GetStream().ReadAsync(byteBuffer, 0, byteBuffer.Length)
-
-                ' Append the data to the StringBuilder
-                If bytesRead > 0 Then
-                    Dim receivedData = Encoding.ASCII.GetString(byteBuffer, 0, bytesRead)
-                    Buffer.Append(receivedData)
-                    AppendTextSafe(frmCluster.TextBox1, receivedData)
-                    Debug.WriteLine($"Received data: {receivedData}")
-
-                    ' Check if the expected response is received
-                    If Buffer.ToString().EndsWith(expectedResponse) Then
-                        Debug.WriteLine($"Expected response received: {Buffer}")
-                        Return True
-                    End If
-                End If
-            End If
-
-            Await Task.Delay(100) ' Check every 100ms
-        End While
-
-        Debug.WriteLine($"Timeout waiting for response: {expectedResponse}")
-        Return False
-    End Function
-
-    ''' <summary>
-    ''' Reads a multi-line response from the TCP stream until a period of inactivity is detected.
-    ''' </summary>
-    ''' <returns>
-    ''' A task that represents the asynchronous operation. The task result contains the complete 
-    ''' multi-line response as a single string.
-    ''' </returns>
-    ''' <remarks>
-    ''' This method continuously reads data from the TCP stream in chunks and appends it to a 
-    ''' <see cref="StringBuilder"/>. The method stops reading when no data is received for a 
-    ''' specified timeout period (1 second of inactivity).
-    ''' 
-    ''' Key features:
-    ''' - Handles multi-line responses from the server.
-    ''' - Uses a timeout to detect the end of the response.
-    ''' - Updates the UI with received data using <see cref="AppendTextSafe"/>.
-    ''' - Logs received data and the final response for debugging purposes.
-    ''' </remarks>
-    ''' <example>
-    ''' Example usage:
-    ''' <code>
-    ''' Dim response As String = Await WaitForMultiLineResponseAsync()
-    ''' If Not String.IsNullOrEmpty(response) Then
-    '''     Console.WriteLine("Response received: " & response)
-    ''' Else
-    '''     Console.WriteLine("No response or timeout occurred.")
-    ''' End If
-    ''' </code>
-    ''' </example>
-    Private Async Function WaitForMultiLineResponseAsync() As Task(Of String)
-        Dim timeout As TimeSpan = TimeSpan.FromSeconds(5) ' Timeout for inactivity
-        Dim startTime As DateTime = DateTime.Now
-        Dim responseBuilder As New StringBuilder()
-
-        Debug.WriteLine("Waiting for multi-line response")
-        Debug.Flush()
-
-        While True
-            ' Check if data is available
-            If ClusterClient.Available > 0 Then
-                Dim byteBuffer(ClusterClient.Available - 1) As Byte
-                Dim bytesRead As Integer = Await ClusterClient.GetStream().ReadAsync(byteBuffer, 0, byteBuffer.Length)
-
-                If bytesRead > 0 Then
-                    Dim receivedData = Encoding.ASCII.GetString(byteBuffer, 0, bytesRead)
-                    responseBuilder.Append(receivedData)
-                    AppendTextSafe(frmCluster.TextBox1, receivedData)
-                    Debug.WriteLine($"Received data chunk: {receivedData}")
-
-                    ' Reset the timeout since data was received
-                    startTime = DateTime.Now
-                End If
-            Else
-                ' Check for inactivity timeout
-                If DateTime.Now - startTime > timeout Then
-                    Debug.WriteLine("No more data received. Ending response collection.")
-                    Exit While
-                End If
-
-                Await Task.Delay(100) ' Wait briefly before checking again
-            End If
-        End While
-
-        Dim finalResponse = responseBuilder.ToString()
-        Return finalResponse
-    End Function
-
-
-    ''' <summary>
-    ''' Disposes of the ClusterManager resources, including closing the TCP connection.
-    ''' </summary>
-    Public Sub Dispose()
-        Try
-            If ClusterClient IsNot Nothing AndAlso ClusterClient.Connected Then
-                ClusterClient.Close()
-                Debug.WriteLine("ClusterManager: TCP connection closed.")
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"ClusterManager: Error during Dispose - {ex.Message}")
-        End Try
-    End Sub
-End Class
-

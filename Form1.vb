@@ -6,6 +6,7 @@ Public Class Form1
     ' Dictionary to store the saved locations of windows from the last session
     Dim Windows As New Dictionary(Of String, Point)
     Public SelectedCall As String
+    Public Shared frmClusterInstance As frmCluster      ' global instance
 
     ' Handles the KeyPress event for TextBox1
     Private Sub TextBox1_KeyPress(sender As Object, e As KeyPressEventArgs) Handles TextBox1.KeyPress
@@ -90,8 +91,8 @@ Public Class Form1
     ' Handles the Click event for Button1
     Private Sub Button1_Click(sender As Object, e As EventArgs) Handles Button1.Click
         ' Create and show a new instance of the frmCluster form
-        Dim dlg = New frmCluster
-        dlg.Show()
+        frmClusterInstance = New frmCluster
+        frmClusterInstance.Show()
     End Sub
 
     Private Sub Button2_Click(sender As Object, e As EventArgs) Handles Button2.Click
