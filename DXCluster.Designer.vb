@@ -22,7 +22,7 @@ Partial Class frmCluster
     'Do not modify it using the code editor.
     <System.Diagnostics.DebuggerStepThrough()> _
     Private Sub InitializeComponent()
-        Dim DataGridViewCellStyle1 As DataGridViewCellStyle = New DataGridViewCellStyle()
+        Dim DataGridViewCellStyle2 As DataGridViewCellStyle = New DataGridViewCellStyle()
         DataGridView1 = New DataGridView()
         ComboBox1 = New ComboBox()
         Label1 = New Label()
@@ -32,10 +32,10 @@ Partial Class frmCluster
         TextBox1 = New TextBox()
         TableLayoutPanel3 = New TableLayoutPanel()
         GroupBox1 = New GroupBox()
+        btnClose = New Button()
         TableLayoutPanel2 = New TableLayoutPanel()
         ComboBox3 = New ComboBox()
         Label3 = New Label()
-        btnClose = New Button()
         CType(DataGridView1, ComponentModel.ISupportInitialize).BeginInit()
         TableLayoutPanel1.SuspendLayout()
         TableLayoutPanel3.SuspendLayout()
@@ -49,17 +49,17 @@ Partial Class frmCluster
         DataGridView1.AllowUserToOrderColumns = True
         DataGridView1.AllowUserToResizeColumns = False
         DataGridView1.AllowUserToResizeRows = False
-        DataGridViewCellStyle1.BackColor = Color.FromArgb(CByte(224), CByte(224), CByte(224))
-        DataGridView1.AlternatingRowsDefaultCellStyle = DataGridViewCellStyle1
-        DataGridView1.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.DisplayedCells
+        DataGridViewCellStyle2.BackColor = Color.FromArgb(CByte(224), CByte(224), CByte(224))
+        DataGridView1.AlternatingRowsDefaultCellStyle = DataGridViewCellStyle2
+        DataGridView1.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
         DataGridView1.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
         DataGridView1.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize
-        DataGridView1.Dock = DockStyle.Fill
+        DataGridView1.Dock = DockStyle.Left
         DataGridView1.Location = New Point(3, 151)
         DataGridView1.MultiSelect = False
         DataGridView1.Name = "DataGridView1"
         DataGridView1.RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.AutoSizeToAllHeaders
-        DataGridView1.Size = New Size(800, 300)
+        DataGridView1.Size = New Size(991, 300)
         DataGridView1.TabIndex = 1
         ' 
         ' ComboBox1
@@ -109,25 +109,26 @@ Partial Class frmCluster
         TableLayoutPanel1.Controls.Add(DataGridView1, 0, 1)
         TableLayoutPanel1.Controls.Add(TableLayoutPanel3, 1, 0)
         TableLayoutPanel1.Controls.Add(GroupBox1, 1, 1)
-        TableLayoutPanel1.Controls.Add(TableLayoutPanel2, 0, 2)
         TableLayoutPanel1.Controls.Add(btnClose, 1, 2)
-        TableLayoutPanel1.Location = New Point(-1, 2)
+        TableLayoutPanel1.Controls.Add(TableLayoutPanel2, 0, 2)
+        TableLayoutPanel1.Dock = DockStyle.Fill
+        TableLayoutPanel1.Location = New Point(0, 0)
         TableLayoutPanel1.Name = "TableLayoutPanel1"
         TableLayoutPanel1.RowCount = 3
         TableLayoutPanel1.RowStyles.Add(New RowStyle())
         TableLayoutPanel1.RowStyles.Add(New RowStyle())
         TableLayoutPanel1.RowStyles.Add(New RowStyle())
-        TableLayoutPanel1.Size = New Size(912, 489)
+        TableLayoutPanel1.Size = New Size(1115, 498)
         TableLayoutPanel1.TabIndex = 9
         ' 
         ' TextBox1
         ' 
-        TextBox1.Dock = DockStyle.Fill
+        TextBox1.Dock = DockStyle.Left
         TextBox1.Location = New Point(3, 3)
         TextBox1.Multiline = True
         TextBox1.Name = "TextBox1"
         TextBox1.ScrollBars = ScrollBars.Vertical
-        TextBox1.Size = New Size(800, 142)
+        TextBox1.Size = New Size(991, 142)
         TextBox1.TabIndex = 10
         ' 
         ' TableLayoutPanel3
@@ -141,7 +142,7 @@ Partial Class frmCluster
         TableLayoutPanel3.Controls.Add(ComboBox2, 0, 3)
         TableLayoutPanel3.Controls.Add(Label2, 0, 2)
         TableLayoutPanel3.Controls.Add(ComboBox1, 0, 1)
-        TableLayoutPanel3.Location = New Point(817, 30)
+        TableLayoutPanel3.Location = New Point(1014, 30)
         TableLayoutPanel3.Name = "TableLayoutPanel3"
         TableLayoutPanel3.RowCount = 4
         TableLayoutPanel3.RowStyles.Add(New RowStyle())
@@ -154,7 +155,7 @@ Partial Class frmCluster
         ' GroupBox1
         ' 
         GroupBox1.AutoSize = True
-        GroupBox1.Location = New Point(809, 151)
+        GroupBox1.Location = New Point(1000, 151)
         GroupBox1.MinimumSize = New Size(100, 100)
         GroupBox1.Name = "GroupBox1"
         GroupBox1.Size = New Size(100, 100)
@@ -162,9 +163,20 @@ Partial Class frmCluster
         GroupBox1.TabStop = False
         GroupBox1.Text = "Amateur Bands"
         ' 
+        ' btnClose
+        ' 
+        btnClose.Anchor = AnchorStyles.None
+        btnClose.Location = New Point(1018, 464)
+        btnClose.Name = "btnClose"
+        btnClose.Size = New Size(75, 23)
+        btnClose.TabIndex = 6
+        btnClose.Text = "Close"
+        btnClose.UseVisualStyleBackColor = True
+        ' 
         ' TableLayoutPanel2
         ' 
         TableLayoutPanel2.AutoSize = True
+        TableLayoutPanel2.AutoSizeMode = AutoSizeMode.GrowAndShrink
         TableLayoutPanel2.ColumnCount = 2
         TableLayoutPanel2.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 16.1061954F))
         TableLayoutPanel2.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 83.89381F))
@@ -179,7 +191,6 @@ Partial Class frmCluster
         ' 
         ' ComboBox3
         ' 
-        ComboBox3.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left
         ComboBox3.FormattingEnabled = True
         ComboBox3.Location = New Point(94, 3)
         ComboBox3.Name = "ComboBox3"
@@ -196,23 +207,13 @@ Partial Class frmCluster
         Label3.TabIndex = 7
         Label3.Text = "Alert Sound"
         ' 
-        ' btnClose
-        ' 
-        btnClose.Anchor = AnchorStyles.None
-        btnClose.Location = New Point(821, 460)
-        btnClose.Name = "btnClose"
-        btnClose.Size = New Size(75, 23)
-        btnClose.TabIndex = 6
-        btnClose.Text = "Close"
-        btnClose.UseVisualStyleBackColor = True
-        ' 
         ' frmCluster
         ' 
         AutoScaleDimensions = New SizeF(7F, 15F)
         AutoScaleMode = AutoScaleMode.Font
         AutoSize = True
         AutoSizeMode = AutoSizeMode.GrowAndShrink
-        ClientSize = New Size(917, 498)
+        ClientSize = New Size(1115, 498)
         Controls.Add(TableLayoutPanel1)
         Name = "frmCluster"
         Text = "DX Cluster"

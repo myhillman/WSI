@@ -1,7 +1,12 @@
 ﻿Imports System.Net.Sockets
 Imports System.Text
+Imports System.Threading
 
 Public Class ClusterManager
+    Implements IDisposable
+
+    ' Dispose pattern implementation
+    Private disposedValue As Boolean
     Private Const ClusterHost As String = "hrd.wa9pie.net"
     Private Const ClusterPort As Integer = 8000
     Private Const LoginTimeout As Integer = 60 ' Timeout for login in seconds
@@ -10,6 +15,24 @@ Public Class ClusterManager
 
     Private ReadOnly ClusterClient As New TcpClient()
     Private ReadOnly Buffer As New StringBuilder()
+
+    Protected Overridable Sub Dispose(disposing As Boolean)
+        If Not disposedValue Then
+            If disposing Then
+                ' Dispose managed resources
+                If ClusterClient IsNot Nothing AndAlso ClusterClient.Connected Then
+                    ClusterClient.Close()
+                End If
+            End If
+            ' Free unmanaged resources (if any)
+            disposedValue = True
+        End If
+    End Sub
+
+    Public Sub Dispose() Implements IDisposable.Dispose
+        Dispose(disposing:=True)
+        GC.SuppressFinalize(Me)
+    End Sub
 
     ''' <summary>
     ''' Connects to the cluster and waits for the "login: " prompt.
@@ -37,33 +60,36 @@ Public Class ClusterManager
         Debug.WriteLine("Failed to connect to the cluster after maximum retries.")
         Return False
     End Function
-
     ''' <summary>
-    ''' Sends a command to the DX cluster server and waits for a specific response.
+    ''' Sends a command to the DX cluster server and optionally waits for a multi-line response.
     ''' </summary>
     ''' <param name="command">The command to send to the server.</param>
-    ''' <param name="EndOfCommand">The expected string that indicates the end of the server's response.</param>
+    ''' <param name="isMultiline">
+    ''' A boolean indicating whether to wait for a multi-line response. 
+    ''' If True, the method waits for a multi-line response; otherwise, it waits for a single-line response.
+    ''' </param>
     ''' <returns>
     ''' A task that represents the asynchronous operation. The task result contains the server's response as a string 
-    ''' if the expected response is received within the timeout; otherwise, an empty string.
+    ''' if the response is received within the timeout; otherwise, an empty string.
     ''' </returns>
     ''' <remarks>
     ''' This method sends a command to the server using a TCP connection and waits for the server's response.
     ''' It ensures that the command is sent and the response is received within the specified timeout.
-    ''' If the response does not match the expected end string, an empty string is returned.
+    ''' If the response does not match the expected format or timeout occurs, an empty string is returned.
     ''' </remarks>
     ''' <exception cref="InvalidOperationException">Thrown if the command data is empty.</exception>
     ''' <example>
     ''' Example usage:
     ''' <code>
-    ''' Dim response As String = Await clusterManager.SendCommandAsync("sh/dx", ">>")
+    ''' Dim response As String = Await clusterManager.SendCommandAsync("sh/dx", True)
     ''' If Not String.IsNullOrEmpty(response) Then
-    '''     Console.WriteLine("Response received: " & response)
+    '''     Console.WriteLine("Response received: " &amp; response)
     ''' Else
     '''     Console.WriteLine("No response or timeout occurred.")
     ''' End If
     ''' </code>
     ''' </example>
+
     Public Async Function SendCommandAsync(command As String, Optional isMultiline As Boolean = False) As Task(Of String)
         Try
             ' Send the command
@@ -72,7 +98,6 @@ Public Class ClusterManager
             If data.Length > 0 Then
                 AppendTextSafe(Form1.frmClusterInstance.TextBox1, command) ' Append the command to the TextBox
                 Await ClusterClient.GetStream().WriteAsync(data)
-                Debug.WriteLine($"Command sent: {command}") : Debug.Flush()
             Else
                 Throw New InvalidOperationException("Command data is empty.")
             End If
@@ -101,7 +126,7 @@ Public Class ClusterManager
     ''' <param name="timeoutInSeconds">The timeout in seconds.</param>
     ''' <returns>True if the response is received, False otherwise.</returns>
     Private Async Function WaitForResponseAsync(expectedResponse As String, timeoutInSeconds As Integer) As Task(Of Boolean)
-        Debug.WriteLine($"Waiting for response: {expectedResponse}")
+        Dim localBuffer As New StringBuilder()
         Dim timeout As TimeSpan = TimeSpan.FromSeconds(timeoutInSeconds)
         Dim startTime As DateTime = DateTime.Now
 
@@ -110,27 +135,24 @@ Public Class ClusterManager
                 Dim byteBuffer(ClusterClient.Available - 1) As Byte
                 Dim bytesRead As Integer = Await ClusterClient.GetStream().ReadAsync(byteBuffer)
 
-                ' Append the data to the StringBuilder
                 If bytesRead > 0 Then
                     Dim receivedData = Encoding.ASCII.GetString(byteBuffer, 0, bytesRead)
-                    Buffer.Append(receivedData)
+                    localBuffer.Append(receivedData)
                     AppendTextSafe(Form1.frmClusterInstance.TextBox1, receivedData)
-                    Debug.WriteLine($"Received data: {receivedData}") : Debug.Flush()
 
-                    ' Check if the expected response is received
-                    If Buffer.ToString().EndsWith(expectedResponse) Then
-                        Debug.WriteLine($"Expected response received: {Buffer}")
+                    If localBuffer.ToString().EndsWith(expectedResponse) Then
                         Return True
                     End If
                 End If
             End If
 
-            Await Task.Delay(100) ' Check every 100ms
+            Await Task.Delay(100)
         End While
 
         Debug.WriteLine($"Timeout waiting for response: {expectedResponse}")
         Return False
     End Function
+
 
     ''' <summary>
     ''' Reads a multi-line response from the TCP stream until a period of inactivity is detected.
@@ -155,7 +177,7 @@ Public Class ClusterManager
     ''' <code>
     ''' Dim response As String = Await WaitForMultiLineResponseAsync()
     ''' If Not String.IsNullOrEmpty(response) Then
-    '''     Console.WriteLine("Response received: " & response)
+    '''     Console.WriteLine("Response received: " &amp; response)
     ''' Else
     '''     Console.WriteLine("No response or timeout occurred.")
     ''' End If
@@ -165,9 +187,6 @@ Public Class ClusterManager
         Dim timeout As TimeSpan = TimeSpan.FromSeconds(5) ' Timeout for inactivity
         Dim startTime As DateTime = DateTime.Now
         Dim responseBuilder As New StringBuilder()
-
-        Debug.WriteLine("Waiting for multi-line response")
-        Debug.Flush()
 
         While True
             ' Check if data is available
@@ -179,7 +198,6 @@ Public Class ClusterManager
                     Dim receivedData = Encoding.ASCII.GetString(byteBuffer, 0, bytesRead)
                     responseBuilder.Append(receivedData)
                     AppendTextSafe(Form1.frmClusterInstance.TextBox1, receivedData)
-                    Debug.WriteLine($"Received data chunk: {receivedData}") : Debug.Flush()
 
                     ' Reset the timeout since data was received
                     startTime = DateTime.Now
@@ -195,20 +213,5 @@ Public Class ClusterManager
 
         Return responseBuilder.ToString()
     End Function
-
-
-    ''' <summary>
-    ''' Disposes of the ClusterManager resources, including closing the TCP connection.
-    ''' </summary>
-    Public Sub Dispose()
-        Try
-            If ClusterClient IsNot Nothing AndAlso ClusterClient.Connected Then
-                ClusterClient.Close()
-                Debug.WriteLine("ClusterManager: TCP connection closed.")
-            End If
-        Catch ex As Exception
-            Debug.WriteLine($"ClusterManager: Error during Dispose - {ex.Message}")
-        End Try
-    End Sub
 End Class
 

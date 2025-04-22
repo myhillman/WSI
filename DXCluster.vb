@@ -3,6 +3,7 @@ Imports System.ComponentModel
 Imports System.Windows.Forms.VisualStyles.VisualStyleElement.Rebar
 Imports System.Text
 Imports System.Collections.Concurrent
+Imports System.Threading
 
 ''' <summary>
 ''' Represents the main form for interacting with a DX cluster server.
@@ -44,8 +45,7 @@ Public Class frmCluster
         ' Get all checked checkboxes in the GroupBox
         Dim selectedBands = gb1.Controls.OfType(Of CheckBox)().
                             Where(Function(cb) cb.Checked).
-                            Select(Function(cb) cb.Text).
-                            ToList()
+                            Select(Function(cb) cb.Text)
 
         ' Save the selected bands as a comma-separated string in My.Settings
         My.Settings.AmateurBands = String.Join(",", selectedBands)
@@ -59,11 +59,13 @@ Public Class frmCluster
     ''' </summary>
     ''' <returns>A Task representing the asynchronous operation.</returns>
     Private Async Function InitializeCluster() As Task
+        ' Create a CancellationTokenSource
         ' Connect to the cluster
         If ClusterInitialized Then Return ' Prevent multiple initializations
-        Await clusterManager.ConnectAsync()         ' connect to cluster
-        Await SendClusterCommand($"{ClusterUsername}{vbCrLf}")  ' send username
+        Await clusterManager.ConnectAsync() ' Pass the CancellationToken
+        Await SendClusterCommand($"{ClusterUsername}{vbCrLf}") ' Send username
         LoggedIn = True
+
         ' Send a series of commands and wait for ">>" prompt
         Await SendClusterCommand($"unset/echo{vbCrLf}")
         Await SendClusterCommand($"set/prompt >>{vbCrLf}")
@@ -92,6 +94,7 @@ Public Class frmCluster
 
         ClusterInitialized = True
     End Function
+
     Private Async Function SendClusterCommand(command As String) As Task
         Dim response = Await clusterManager.SendCommandAsync(command)
     End Function
@@ -410,8 +413,7 @@ Public Class frmCluster
         If Not OpenWSIDialogs.IsEmpty Then
             Dim wsiDialog = OpenWSIDialogs(row.Cells("DX Call").Value)    ' get WSI dialog for this call
             If wsiDialog IsNot Nothing Then
-                Dim dgv = CType(wsiDialog.Controls.Find("DataGridView1", True).FirstOrDefault(), DataGridView) ' find DataGridView1
-                ' in WSI dialog
+                Dim dgv = CType(wsiDialog.Controls.Find("DataGridView1", True).FirstOrDefault(), DataGridView) ' find DataGridView1 in WSI dialog
                 If dgv.DataSource IsNot Nothing Then
                     ' Get the DataTable from wsi form DataGridView1.DataSource
                     Dim dt As DataTable = TryCast(dgv.DataSource, DataTable)
@@ -434,16 +436,6 @@ Public Class frmCluster
                 End If
             End If
         End If
-    End Sub
-
-    Private Sub DisplayControlHierarchy(parent As Control, Optional indent As String = "")
-        ' Print the current control's name and type
-        Debug.WriteLine($"{indent}{parent.Name} ({parent.GetType().Name})")
-
-        ' Recursively display child controls
-        For Each child As Control In parent.Controls
-            DisplayControlHierarchy(child, indent & "  ") ' Increase indentation for child controls
-        Next
     End Sub
 
     ''' <summary>
@@ -870,18 +862,7 @@ Public Class frmCluster
     ''' - Sets up a polling timer to periodically poll the DX cluster server.
     ''' </remarks>
     Private Async Sub frmCluster_Load(sender As Object, e As EventArgs) Handles MyBase.Load
-        ' Create data source
-
-        ' Display the control hierarchy in the Debug output
-        Debug.WriteLine("Control Hierarchy of frmCluster:")
-        DisplayControlHierarchy(Me)
         ' Find controls
-        'dgv1 = CType(FindControlRecursive(Me, "DataGridView1"), DataGridView)
-        'cmb1 = CType(FindControlRecursive(Me, "ComboBox1"), ComboBox)
-        'cmb2 = CType(FindControlRecursive(Me, "ComboBox2"), ComboBox)
-        'cmb3 = CType(FindControlRecursive(Me, "ComboBox3"), ComboBox)
-        'gb1 = CType(FindControlRecursive(Me, "GroupBox1"), GroupBox)
-        'txt1 = CType(FindControlRecursive(Me, "TextBox1"), TextBox)
         Try
             dgv1 = CType(DataGridView1, DataGridView)
             cmb1 = CType(ComboBox1, ComboBox)
@@ -893,6 +874,13 @@ Public Class frmCluster
             Debug.WriteLine($"Error finding controls: {ex.Message}")
             Return
         End Try
+        TableLayoutPanel1.RowStyles(0).SizeType = SizeType.Percent
+        TableLayoutPanel1.RowStyles(0).Height = 100 ' Allocate 100% of the height to the row
+        TableLayoutPanel1.ColumnStyles(0).SizeType = SizeType.Percent
+        TableLayoutPanel1.ColumnStyles(0).Width = 100 ' Allocate 100% of the width to the column
+        DataGridView1.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+        DataGridView1.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
+        TableLayoutPanel1.PerformLayout()
 
         Dim DisplayOrder() As String = {"CC11", "DX Call", "Frequency", "Band", "Mode", "Date", "Time", "Comment", "Spotter", "Entity", "Spotter DXCC", "Spotter Node", "ITU DX", "CQ DX", "ITU Spotter", "CQ Spotter", "DX State", "Spotter State", "DX Country", "Spotter Country", "DX Grid", "Spotter Grid"}    ' the order the columns are displayed
 
@@ -1104,16 +1092,9 @@ Public Class frmCluster
     ''' Ensures that the ClusterManager is properly disposed of.
     ''' </summary>
     Private Sub frmCluster_Closing(sender As Object, e As CancelEventArgs) Handles MyBase.Closing
-        ' Dispose of the ClusterManager
         clusterManager?.Dispose()
-
-        ' Stop the polling timer
-        If PollingTimer IsNot Nothing Then
-            PollingTimer.Stop()
-            PollingTimer.Dispose()
-        End If
-
-        Debug.WriteLine("frmCluster: Resources cleaned up on closing.")
+        PollingTimer?.Dispose()
+        Debug.WriteLine("Resources cleaned up on closing.")
     End Sub
     Private Sub ComboBox3_SelectedIndexChanged(sender As Object, e As EventArgs) Handles ComboBox3.SelectedIndexChanged
         SaveSound(sender)
@@ -1126,6 +1107,15 @@ Public Class frmCluster
             My.Settings.Save()
             soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays the selected alert sound
         End If
+    End Sub
+
+    Private Sub DataGridView1_Resize(sender As Object, e As EventArgs) Handles DataGridView1.Resize
+        Debug.WriteLine($"DataGridView1 resized to: {DataGridView1.Size}")
+    End Sub
+
+    Private Sub TableLayoutPanel1_Resize(sender As Object, e As EventArgs) Handles TableLayoutPanel1.Resize
+        Debug.WriteLine($"TableLayoutPanel1 resized to: {TableLayoutPanel1.Size}")
+
     End Sub
 #End Region
 End Class
