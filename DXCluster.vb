@@ -32,7 +32,6 @@ Public Class frmCluster
     Private PollingTimer As System.Timers.Timer     ' timer to poll cluster
     Private buffer As String = "", cr As Integer
     Dim ClusterInitialized As Boolean = False       ' true when cluster config complete
-    Private OpenWSIDialogs As ConcurrentDictionary(Of String, Form) ' Dictionary to store open WSI dialogs
     Private soundPlayer As New SoundPlayerHelper()      ' Load the sound player
     Private clusterManager As New ClusterManager()
     ' As the forms controls are not directly accessible, we need to use FindControlRecursive to get them
@@ -147,13 +146,13 @@ Public Class frmCluster
             Return
         End If
 
-        ' Get list of all active WSI dialogs
-        GetOpenWSIDialogs()
+
+        Dim callsigns = GetAllTabTags()     ' Get list of all tabs
 
         ' Perform polling logic
-        For Each kvp In OpenWSIDialogs
+        For Each item In callsigns
             ' Send the sh/dx command and wait for a burst of data
-            Dim response = Await clusterManager.SendCommandAsync($"sh/dx {kvp.Key}{vbCrLf}", isMultiline:=True)
+            Dim response = Await clusterManager.SendCommandAsync($"sh/dx {item}{vbCrLf}", isMultiline:=True)
             If Not String.IsNullOrWhiteSpace(response) Then
                 ' Pull apart buffer into messages
                 Dim messages As String() = response.Split(New String() {vbCrLf}, StringSplitOptions.RemoveEmptyEntries)
@@ -167,6 +166,24 @@ Public Class frmCluster
         Next
         ApplyAgeFilter(cmb1)  ' Apply the age filter
     End Sub
+    ''' <summary>
+    ''' Retrieves a list of all <see cref="TabPage.Tag"/> values from the TabControl in the main form.
+    ''' </summary>
+    ''' <returns>
+    ''' A <see cref="List(Of Object)"/> containing the <see cref="TabPage.Tag"/> values of all tabs in the TabControl.
+    ''' </returns>
+    Private Function GetAllTabTags() As List(Of Object)
+        Dim tags As New List(Of Object)()
+
+        ' Iterate through all TabPages in TabControl1
+        For Each tab As TabPage In Form1.TabControl1.TabPages
+            If tab.Tag IsNot Nothing Then
+                tags.Add(tab.Tag) ' Add the Tag value to the list
+            End If
+        Next
+
+        Return tags
+    End Function
     ''' <summary>
     ''' Ensures that the specified action is executed on the UI thread.
     ''' If the calling thread is not the UI thread, the action is invoked on the UI thread.
@@ -286,27 +303,6 @@ Public Class frmCluster
     End Function
 
     ''' <summary>
-    ''' Retrieves a dictionary of open WSI dialog forms.
-    ''' </summary>
-    ''' <returns>
-    ''' A dictionary where the key is the name of the form and the value is the WSI form instance.
-    ''' </returns>
-    ''' <remarks>
-    ''' This method iterates through all open forms in the application and filters out those of type WSI.
-    ''' It is useful for managing and interacting with multiple WSI dialog instances.
-    ''' </remarks>
-    Public Shared Function GetOpenWSIDialogs() As ConcurrentDictionary(Of String, Form)
-        Dim wsiDialogs As New ConcurrentDictionary(Of String, Form)
-        For Each frm As Form In Application.OpenForms
-            If TypeOf frm Is WSI Then
-                Dim t = frm.Text
-                wsiDialogs.TryAdd(frm.Text, frm)
-            End If
-        Next
-        Return wsiDialogs
-    End Function
-
-    ''' <summary>
     ''' Creates and returns a DataTable containing predefined TimeSpan values and their descriptions.
     ''' This DataTable is used as the data source for a ComboBox to allow users to select an update interval.
     ''' </summary>
@@ -405,38 +401,54 @@ Public Class frmCluster
     Private Sub DataGridView1_RowPrePaint(sender As Object, e As DataGridViewRowPrePaintEventArgs) Handles DataGridView1.RowPrePaint
         ' Get the current row
         Dim row As DataGridViewRow = dgv1.Rows(e.RowIndex)
-
+        Dim callsign = row.Cells("DX Call").Value
+        ' get tab containing data
+        Dim tab = GetTabPageByTag(callsign)
+        If tab Is Nothing Then Return
         ' Get the band value from the current row
         Dim band As String = row.Cells("Band").Value?.ToString()
         If String.IsNullOrEmpty(band) Then Return ' Exit if the band value is empty
 
-        If Not OpenWSIDialogs.IsEmpty Then
-            Dim wsiDialog = OpenWSIDialogs(row.Cells("DX Call").Value)    ' get WSI dialog for this call
-            If wsiDialog IsNot Nothing Then
-                Dim dgv = CType(wsiDialog.Controls.Find("DataGridView1", True).FirstOrDefault(), DataGridView) ' find DataGridView1 in WSI dialog
-                If dgv.DataSource IsNot Nothing Then
-                    ' Get the DataTable from wsi form DataGridView1.DataSource
-                    Dim dt As DataTable = TryCast(dgv.DataSource, DataTable)
+        Dim dgv = CType(tab.Controls.Find($"DataGridView1_{callsign}", True).FirstOrDefault(), DataGridView) ' find DataGridView1 in WSI dialog
+        If dgv.DataSource IsNot Nothing Then
+            ' Get the DataTable from wsi form DataGridView1.DataSource
+            Dim dt As DataTable = TryCast(dgv.DataSource, DataTable)
 
-                    ' if column exists, and it is not empty, then we've had a contact on ths slot
-                    Dim ColumnName = $"BAND_{band}"
-                    If Not dt.Columns.Contains(ColumnName) OrElse
+            ' if column exists, and it is not empty, then we've had a contact on ths slot
+            Dim ColumnName = $"BAND_{band}"
+            If Not dt.Columns.Contains(ColumnName) OrElse
                            dt.Rows.Count = 0 OrElse
                            String.IsNullOrEmpty(dt.Rows(0)(ColumnName)?.ToString()) Then
-                        ' Highlight the row if no contact on this band
-                        row.DefaultCellStyle.BackColor = Color.LightGreen
-                        ' Play a sound to indicate a new spot
-                        If Not soundPlayer.IsSoundPlaying Then
-                            soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays a notification sound
-                        End If
-                    Else
-                        ' Reset the background color if previous contact on this band
-                        row.DefaultCellStyle.BackColor = Color.White
-                    End If
+                ' Highlight the row if no contact on this band
+                row.DefaultCellStyle.BackColor = Color.LightGreen
+                ' Play a sound to indicate a new spot
+                If Not soundPlayer.IsSoundPlaying Then
+                    soundPlayer.PlayWavWithLimit(My.Settings.Alert, 2 * 1000) ' Plays a notification sound
                 End If
+            Else
+                ' Reset the background color if previous contact on this band
+                row.DefaultCellStyle.BackColor = Color.White
             End If
         End If
     End Sub
+    ''' <summary>
+    ''' Retrieves a reference to a TabPage in the TabControl with the specified Tag value.
+    ''' </summary>
+    ''' <param name="tagValue">The Tag value to search for.</param>
+    ''' <returns>
+    ''' The <see cref="TabPage"/> with the specified Tag value, or <c>Nothing</c> if no match is found.
+    ''' </returns>
+    Private Function GetTabPageByTag(tagValue As Object) As TabPage
+        ' Iterate through all TabPages in TabControl1
+        For Each tab As TabPage In Form1.TabControl1.TabPages
+            If tab.Tag IsNot Nothing AndAlso tab.Tag.Equals(tagValue) Then
+                Return tab ' Return the matching TabPage
+            End If
+        Next
+
+        ' Return Nothing if no match is found
+        Return Nothing
+    End Function
 
     ''' <summary>
     ''' Handles the CellMouseEnter event for DataGridView1.
@@ -529,8 +541,8 @@ Public Class frmCluster
                 ' Check if the DataTable already contains the data
                 Dim rows As DataRow() = dt.Select($"Frequency='{row("Frequency")}' AND [DX Call]='{row("DX Call")}' AND Date='{row("Date")}' AND Time='{row("Time").tolower}' AND Spotter='{row("Spotter")}'")
                 If rows.Length = 0 Then     ' it does not, so add
-                    ' Check that the callsign is in the list. Sometimes some unasked for ones are present
-                    If OpenWSIDialogs.ContainsKey(row("DX Call")) Then
+                    ' Check that the callsign is in the tab list. Sometimes some unasked for ones are present
+                    If GetTabPageByTag(row("DX Call")) IsNot Nothing Then
                         row("Band") = FreqToBand(CSng(row("Frequency")))      ' create band column
                         row("Mode") = InferMode(CSng(row("Frequency")))      ' create mode column")
                         row("Time") = row("Time").tolower()           ' 
@@ -928,8 +940,6 @@ Public Class frmCluster
             dgv1.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells)
             .Refresh()
         End With
-
-        OpenWSIDialogs = GetOpenWSIDialogs() ' get list of open WSI dialogs
 
         PollingTimer = New Timers.Timer With {
             .AutoReset = True ' Ensure the timer repeats
