@@ -10,7 +10,7 @@ Public Class ClusterManager
     Private Const ClusterHost As String = "hrd.wa9pie.net"
     Private Const ClusterPort As Integer = 8000
     Private Const LoginTimeout As Integer = 60 ' Timeout for login in seconds
-    Private Const CommandTimeout As Integer = 20 ' Timeout for commands in seconds
+    Private Const CommandTimeout As Integer = 5 ' Timeout for commands in seconds
     Private Const MaxRetries As Integer = 3 ' Maximum retries for login
 
     Private ReadOnly ClusterClient As New TcpClient()

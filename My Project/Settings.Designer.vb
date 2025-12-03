@@ -69,18 +69,6 @@ Namespace My
         <Global.System.Configuration.UserScopedSettingAttribute(),  _
          Global.System.Diagnostics.DebuggerNonUserCodeAttribute(),  _
          Global.System.Configuration.DefaultSettingValueAttribute("")>  _
-        Public Property Windows() As String
-            Get
-                Return CType(Me("Windows"),String)
-            End Get
-            Set
-                Me("Windows") = value
-            End Set
-        End Property
-        
-        <Global.System.Configuration.UserScopedSettingAttribute(),  _
-         Global.System.Diagnostics.DebuggerNonUserCodeAttribute(),  _
-         Global.System.Configuration.DefaultSettingValueAttribute("")>  _
         Public Property AmateurBands() As String
             Get
                 Return CType(Me("AmateurBands"),String)

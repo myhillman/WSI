@@ -6,7 +6,7 @@ Imports System.Text.Json
 Imports System.Text.RegularExpressions
 Imports System.Threading
 Imports Microsoft.AspNetCore.WebUtilities
-Imports MySql.Data.MySqlClient
+Imports Microsoft.Data.Sqlite
 
 ''' <summary>
 ''' Represents the main form of the application, providing a user interface for managing and displaying 
@@ -29,7 +29,9 @@ Imports MySql.Data.MySqlClient
 Public Class Form1
     ' Dictionary to store the saved locations of windows from the last session
     Public Shared frmClusterInstance As frmCluster      ' global instance
-    Public con As New MySqlConnection(ConnectString)     ' connect to HRD log
+    Public Const dbFileName = "c:\Users\User\Documents\Ham Radio Deluxe\HRD Logbook\VK3OHM.hrdsql"
+    Public ConnectString = $"data source={dbFileName}"     ' SQLite connection string
+    Public con As New SqliteConnection(ConnectString)     ' connect to HRD log
 
     ''' <summary>
     ''' Creates a new tab in TabControl1 for the specified callsign.
@@ -68,11 +70,22 @@ Public Class Form1
                 .Dock = DockStyle.Fill,
                 .Name = $"TableLayoutPanel_{callsign}",
                 .RowCount = 4,
-                .ColumnCount = 1
+                .ColumnCount = 1,
+                .AutoSize = False,
+                .Padding = New Padding(2), ' Add padding around the panel
+                .CellBorderStyle = TableLayoutPanelCellBorderStyle.Single, ' Add borders to visualize cells
+                .GrowStyle = TableLayoutPanelGrowStyle.FixedSize ' Prevent automatic growth
             }
             .Controls.Add(tpl) ' Add the TableLayoutPanel to the TabPage
             tpl.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100)) ' Set column style
             With tpl
+                ' Configure row styles properly for equal distribution
+                .RowStyles.Clear()
+                .RowStyles.Add(New RowStyle(SizeType.AutoSize)) ' Label1
+                .RowStyles.Add(New RowStyle(SizeType.Percent, 45)) ' dgv1
+                .RowStyles.Add(New RowStyle(SizeType.AutoSize)) ' Label2
+                .RowStyles.Add(New RowStyle(SizeType.Percent, 45)) ' dgv2
+
                 Dim label1 = New Label With {
                     .Dock = DockStyle.Top,
                     .AutoSize = True,
@@ -84,9 +97,11 @@ Public Class Form1
                 Dim dgv1 = New DataGridView With {
                 .Name = $"DataGridView1_{callsign}",
                 .Dock = DockStyle.Fill,
-                .AllowUserToAddRows = False
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right Or AnchorStyles.Bottom,
+                .AllowUserToAddRows = False,
+                .Margin = New Padding(2) ' Add margin to keep inside the cell
             }
-                tpl.SetCellPosition(dgv1, New TableLayoutPanelCellPosition(1, 0))
+                tpl.SetCellPosition(dgv1, New TableLayoutPanelCellPosition(0, 1))
                 .Controls.Add(dgv1)
 
                 Dim label2 = New Label With {
@@ -94,15 +109,17 @@ Public Class Form1
                 .AutoSize = True,
                 .Name = $"Label2_{callsign}"
             }
-                tpl.SetCellPosition(label2, New TableLayoutPanelCellPosition(2, 0))
+                tpl.SetCellPosition(label2, New TableLayoutPanelCellPosition(0, 2))
                 .Controls.Add(label2)
 
                 Dim dgv2 = New DataGridView With {
                 .Name = $"DataGridView2_{callsign}",
                 .Dock = DockStyle.Fill,
-                .AllowUserToAddRows = False
+                .Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right Or AnchorStyles.Bottom,
+                .AllowUserToAddRows = False,
+                .Margin = New Padding(2) ' Add margin to keep inside the cell
             }
-                tpl.SetCellPosition(dgv2, New TableLayoutPanelCellPosition(3, 0))
+                tpl.SetCellPosition(dgv2, New TableLayoutPanelCellPosition(0, 3))
                 .Controls.Add(dgv2)
             End With
         End With
@@ -120,8 +137,8 @@ Public Class Form1
         Const Digital = "COL_MODE IN ('AMTOR','ARDOP','CHIP','CLOVER','CONTESTI','DOMINO','DSTAR','FREEDV','FSK31','FSK441','FT4','FT8','GTOR','HELL','HFSK','ISCAT','JT4','JT65','JT6M','JT9','MFSK','MINIRTTY','MSK144','MT63','OLIVIA','OPERA','PACKET','PACTOR','PAX','PSK10','PSK125','PSK2K','PSK31','PSK63','PSK63F','PSKAM','PSKFEC31','Q15','QRA64','ROS','RTTY','RTTYM','SSTV','T10','THOR','THROB','VOI','WINMOR')"    ' SQL fragment for Digital mode
         Const Confirmed = "SUM(IF(COL_QSL_RCVD='Y' OR COL_EQSL_QSL_RCVD='Y' OR COL_LOTW_QSL_RCVD='Y' OR COL_LOTW_QSL_RCVD='V',1,0))"
         Dim callsign = tab.Tag.ToString()       ' callsign of tab
-        Dim tpl = tab.Controls.Find($"TableLayoutPanel_{callsign}", True).FirstOrDefault()
-        Dim sqldr As MySqlDataReader, DXCC As Integer = 0, Country As String = "", result As Integer = 1
+        Dim tpl As TableLayoutPanel = tab.Controls.Find($"TableLayoutPanel_{callsign}", True).FirstOrDefault()
+        Dim sqldr As SqliteDataReader, DXCC As Integer = 0, Country As String = "", result As Integer = 1
         Dim clublog As New List(Of (band As String, mode As String)), band As String = "", mode As String = ""
         Dim ClublogJSON As New Dictionary(Of String, Dictionary(Of String, Integer))
 
@@ -140,7 +157,6 @@ Public Class Form1
         Next
 
         ' Get clublog matches
-
         Using httpClient As New HttpClient()
             Try
                 Dim GETfields As New Dictionary(Of String, String) From {
@@ -175,7 +191,7 @@ Public Class Form1
         End Using
 
         ' Populate DataTable for DataGridView1
-        Using cmd As New MySqlCommand()
+        Using cmd As New SqliteCommand()
             With cmd
                 .Connection = con
                 .CommandText = $"SELECT COL_DXCC AS DXCC, COL_FREQ_RX, COL_COUNTRY as Country, COL_BAND as BAND,
@@ -184,7 +200,7 @@ Public Class Form1
                                     WHEN {Digital} THEN 'Digital'
                                     ELSE 'Other' END as MODE,
                                     {Confirmed} AS Confirmed
-                                    FROM TABLE_HRD_CONTACTS_V01
+                                    FROM TABLE_HRD_CONTACTS_V07
                                     WHERE COL_CALL='{callsign}'
                                     GROUP BY BAND,MODE
                                     ORDER BY COL_FREQ DESC"       ' get records of this callsign
@@ -264,24 +280,21 @@ Public Class Form1
             End Using
         End If
 
-        Using cmd As New MySqlCommand()
-            With cmd
-                .Connection = con
-                .CommandText = $"SELECT COL_DXCC AS DXCC, COL_BAND as BAND,
+        Dim sql As String = $"SELECT COL_DXCC AS DXCC, COL_BAND as BAND,
                                             CASE WHEN {Phone} THEN 'Phone'
                                             WHEN {CW} THEN 'CW'
                                             WHEN {Digital} THEN 'Digital'
                                             ELSE 'Other' END as MODE,
                                             {Confirmed} AS Confirmed
-                                            FROM TABLE_HRD_CONTACTS_V01
+                                            FROM TABLE_HRD_CONTACTS_V07
                                             WHERE COL_DXCC='{DXCC}'
                                             GROUP BY BAND,MODE
                                             ORDER BY COL_FREQ DESC"       ' get records of this callsign
-                .CommandType = CommandType.Text
-            End With
+
+        Using cmd As New SqliteCommand(sql, con)
             Dim lbl2 = tab.Controls.Find($"Label2_{callsign}", True).FirstOrDefault()
             sqldr = cmd.ExecuteReader
-            Dim PartialLabel = $"QSO for {Country} ({DXCC})"
+            Dim PartialLabel = $"QSO for {Country.Replace("&", "&&")} ({DXCC})"     ' escape &
             If Not sqldr.HasRows Then
                 ' No callsign in database
                 lbl2.Text = $"No {PartialLabel}"
@@ -323,18 +336,43 @@ Public Class Form1
         dgv2.DataSource = dt2
         FormatDataGridView(dgv2)
 
+        ' Set minimum heights for DataGridViews based on their content
+        Dim minHeight1 As Integer = dgv1.Rows.GetRowsHeight(DataGridViewElementStates.Visible) + dgv1.ColumnHeadersHeight
+        Dim minHeight2 As Integer = dgv2.Rows.GetRowsHeight(DataGridViewElementStates.Visible) + dgv2.ColumnHeadersHeight
+
+        ' Set the minimum heights directly on the DataGridViews
+        dgv1.MinimumSize = New Size(0, minHeight1)
+        dgv2.MinimumSize = New Size(0, minHeight2)
+
+        ' Disable AutoSize on the TableLayoutPanel to allow manual sizing
+        tpl.AutoSize = False
+
+        ' Update the row styles to properly allocate space
+        With tpl
+            .RowStyles.Clear()
+            .RowStyles.Add(New RowStyle(SizeType.AutoSize)) ' Label1
+            .RowStyles.Add(New RowStyle(SizeType.Absolute, minHeight1 + 5)) ' dgv1 with fixed height
+            .RowStyles.Add(New RowStyle(SizeType.AutoSize)) ' Label2
+            .RowStyles.Add(New RowStyle(SizeType.Absolute, minHeight2 + 5)) ' dgv2 with fixed height
+            .ResumeLayout(True)
+        End With
+
+        ' Ensure DataGridViews respect the boundaries
+        dgv1.Margin = New Padding(2)
+        dgv2.Margin = New Padding(2)
+
         ' Add handlers for cell formatting
         AddHandler dgv1.CellFormatting, AddressOf DGVCellFormatting
         AddHandler dgv2.CellFormatting, AddressOf DGVCellFormatting
 
         ' resize the form
-        tpl.PerformLayout()       ' let panel size itself
-        Me.ClientSize = tpl.PreferredSize
-        Dim borderWidth As Integer = Me.Width - Me.ClientSize.Width
-        Dim titleBarHeight As Integer = Me.Height - Me.ClientSize.Height
-        Me.Size = New Size(tpl.PreferredSize.Width + borderWidth, tpl.PreferredSize.Height + titleBarHeight)
+        ' Me.ClientSize = tpl.PreferredSize
+        'Dim borderWidth As Integer = Me.Width - Me.ClientSize.Width
+        'Dim titleBarHeight As Integer = Me.Height - Me.ClientSize.Height
+        'Me.Size = New Size(tpl.PreferredSize.Width + borderWidth, tpl.PreferredSize.Height + titleBarHeight)
 
         ' Force layout updates
+        tpl.PerformLayout()       ' let panel size itself
         Me.PerformLayout()
         Me.Refresh()
         Return
@@ -407,9 +445,17 @@ Public Class Form1
             .AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells
             .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
             .ScrollBars = ScrollBars.None
-            .Width = .Columns.GetColumnsWidth(DataGridViewElementStates.Visible) + .RowHeadersWidth + 2
-            .Height = .Rows.GetRowsHeight(DataGridViewElementStates.Visible) + .ColumnHeadersHeight + 4
-            .ResumeLayout()
+
+            ' Calculate the width and height based on content
+            '.Width = .Columns.GetColumnsWidth(DataGridViewElementStates.Visible) + .RowHeadersWidth + 2
+            '.Height = .Rows.GetRowsHeight(DataGridViewElementStates.Visible) + .ColumnHeadersHeight + 4
+            .Margin = New Padding(2)
+            ' Ensure no row is selected in the DataGridView
+            .ClearSelection()
+            .CurrentCell = Nothing
+            ' Ensure the DataGridView's parent control recalculates its layout
+            .Parent?.PerformLayout()
+            .ResumeLayout(True)
         End With
     End Sub
     ''' <summary>
@@ -676,10 +722,6 @@ Public Class Form1
         End If
     End Sub
 
-    Private Sub TabControl1_SelectedIndexChanged(sender As Object, e As EventArgs) Handles TabControl1.SelectedIndexChanged
-
-    End Sub
-
     Private Sub TabControl1_DrawItem(sender As Object, e As DrawItemEventArgs) Handles TabControl1.DrawItem
         Dim tabControl As TabControl = CType(sender, TabControl)
 
@@ -698,5 +740,43 @@ Public Class Form1
             TextRenderer.DrawText(e.Graphics, tabText, tabControl.Font, tabRect, Color.Black, TextFormatFlags.HorizontalCenter Or TextFormatFlags.VerticalCenter)
         End If
     End Sub
+    ''' <summary>
+    ''' Handles the Click event for Button4 to delete and recreate the active tab in TabControl1.
+    ''' </summary>
+    ''' <param name="sender">The source of the event, typically Button4.</param>
+    ''' <param name="e">Provides data for the Click event.</param>
+    ''' <remarks>
+    ''' This method performs the following steps:
+    ''' 1. Checks if there is an active tab in TabControl1.
+    ''' 2. Retrieves the callsign associated with the active tab from its Tag property.
+    ''' 3. Deletes the active tab from TabControl1.
+    ''' 4. Recreates the tab using the same callsign by calling <see cref="CreateTabForCallsign"/>.
+    ''' 
+    ''' If no active tab exists or the active tab does not have a valid callsign, an error message is displayed.
+    ''' </remarks>
+    Private Sub Button4_Click(sender As Object, e As EventArgs) Handles Button4.Click
+        ' Check if there is a selected tab
+        If TabControl1.SelectedTab IsNot Nothing Then
+            ' Get the active tab
+            Dim activeTab As TabPage = TabControl1.SelectedTab
+
+            ' Retrieve the callsign from the tab's Tag property
+            Dim callsign As String = If(activeTab.Tag?.ToString(), String.Empty)
+
+            ' Ensure the callsign is valid
+            If Not String.IsNullOrEmpty(callsign) Then
+                ' Remove the active tab
+                TabControl1.TabPages.Remove(activeTab)
+
+                ' Recreate the tab
+                CreateTabForCallsign(callsign)
+            Else
+                MessageBox.Show("The active tab does not have a valid callsign.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End If
+        Else
+            MessageBox.Show("No active tab to delete and recreate.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Information)
+        End If
+    End Sub
 #End Region
+
 End Class

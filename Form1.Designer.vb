@@ -32,6 +32,10 @@ Partial Class Form1
         Button4 = New Button()
         PrintDocument1 = New Printing.PrintDocument()
         Button5 = New Button()
+        TableLayoutPanel1 = New TableLayoutPanel()
+        TableLayoutPanel2 = New TableLayoutPanel()
+        TableLayoutPanel1.SuspendLayout()
+        TableLayoutPanel2.SuspendLayout()
         SuspendLayout()
         ' 
         ' TextBox1
@@ -85,15 +89,16 @@ Partial Class Form1
         ' 
         ' TabControl1
         ' 
-        TabControl1.Location = New Point(21, 70)
+        TabControl1.Location = New Point(3, 3)
         TabControl1.Name = "TabControl1"
         TabControl1.SelectedIndex = 0
-        TabControl1.Size = New Size(549, 297)
+        TabControl1.Size = New Size(544, 260)
         TabControl1.TabIndex = 6
         ' 
         ' Button3
         ' 
-        Button3.Location = New Point(81, 373)
+        Button3.Anchor = AnchorStyles.None
+        Button3.Location = New Point(3, 9)
         Button3.Name = "Button3"
         Button3.Size = New Size(75, 29)
         Button3.TabIndex = 7
@@ -102,7 +107,8 @@ Partial Class Form1
         ' 
         ' Button4
         ' 
-        Button4.Location = New Point(167, 373)
+        Button4.Anchor = AnchorStyles.None
+        Button4.Location = New Point(85, 9)
         Button4.Name = "Button4"
         Button4.Size = New Size(75, 29)
         Button4.TabIndex = 8
@@ -111,12 +117,45 @@ Partial Class Form1
         ' 
         ' Button5
         ' 
-        Button5.Location = New Point(270, 373)
+        Button5.Anchor = AnchorStyles.None
+        Button5.Location = New Point(173, 9)
         Button5.Name = "Button5"
         Button5.Size = New Size(75, 29)
         Button5.TabIndex = 9
         Button5.Text = "Close"
         Button5.UseVisualStyleBackColor = True
+        ' 
+        ' TableLayoutPanel1
+        ' 
+        TableLayoutPanel1.AutoSize = True
+        TableLayoutPanel1.AutoSizeMode = AutoSizeMode.GrowAndShrink
+        TableLayoutPanel1.ColumnCount = 1
+        TableLayoutPanel1.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50F))
+        TableLayoutPanel1.Controls.Add(TableLayoutPanel2, 0, 1)
+        TableLayoutPanel1.Controls.Add(TabControl1, 0, 0)
+        TableLayoutPanel1.Location = New Point(23, 74)
+        TableLayoutPanel1.Name = "TableLayoutPanel1"
+        TableLayoutPanel1.RowCount = 2
+        TableLayoutPanel1.RowStyles.Add(New RowStyle(SizeType.Percent, 83.4375F))
+        TableLayoutPanel1.RowStyles.Add(New RowStyle(SizeType.Percent, 16.5625F))
+        TableLayoutPanel1.Size = New Size(550, 320)
+        TableLayoutPanel1.TabIndex = 10
+        ' 
+        ' TableLayoutPanel2
+        ' 
+        TableLayoutPanel2.ColumnCount = 3
+        TableLayoutPanel2.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50F))
+        TableLayoutPanel2.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50F))
+        TableLayoutPanel2.ColumnStyles.Add(New ColumnStyle(SizeType.Absolute, 93F))
+        TableLayoutPanel2.Controls.Add(Button3, 0, 0)
+        TableLayoutPanel2.Controls.Add(Button5, 2, 0)
+        TableLayoutPanel2.Controls.Add(Button4, 1, 0)
+        TableLayoutPanel2.Location = New Point(3, 270)
+        TableLayoutPanel2.Name = "TableLayoutPanel2"
+        TableLayoutPanel2.RowCount = 1
+        TableLayoutPanel2.RowStyles.Add(New RowStyle(SizeType.Percent, 50F))
+        TableLayoutPanel2.Size = New Size(258, 47)
+        TableLayoutPanel2.TabIndex = 0
         ' 
         ' Form1
         ' 
@@ -124,11 +163,8 @@ Partial Class Form1
         AutoScaleMode = AutoScaleMode.Font
         AutoSize = True
         AutoSizeMode = AutoSizeMode.GrowAndShrink
-        ClientSize = New Size(586, 413)
-        Controls.Add(Button5)
-        Controls.Add(Button4)
-        Controls.Add(Button3)
-        Controls.Add(TabControl1)
+        ClientSize = New Size(586, 402)
+        Controls.Add(TableLayoutPanel1)
         Controls.Add(Button1)
         Controls.Add(TextBox2)
         Controls.Add(Label2)
@@ -136,6 +172,8 @@ Partial Class Form1
         Controls.Add(TextBox1)
         Name = "Form1"
         Text = "Worked Status Indicator"
+        TableLayoutPanel1.ResumeLayout(False)
+        TableLayoutPanel2.ResumeLayout(False)
         ResumeLayout(False)
         PerformLayout()
     End Sub
@@ -150,4 +188,6 @@ Partial Class Form1
     Friend WithEvents Button4 As Button
     Friend WithEvents PrintDocument1 As Printing.PrintDocument
     Friend WithEvents Button5 As Button
+    Friend WithEvents TableLayoutPanel1 As TableLayoutPanel
+    Friend WithEvents TableLayoutPanel2 As TableLayoutPanel
 End Class
