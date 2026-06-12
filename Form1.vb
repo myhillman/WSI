@@ -1,5 +1,4 @@
-﻿Imports System.ComponentModel
-Imports System.Drawing.Printing
+﻿Imports System.Drawing.Printing
 Imports System.Net.Http
 Imports System.Net.Http.Json
 Imports System.Text.Json
@@ -191,10 +190,7 @@ Public Class Form1
         End Using
 
         ' Populate DataTable for DataGridView1
-        Using cmd As New SqliteCommand()
-            With cmd
-                .Connection = con
-                .CommandText = $"SELECT COL_DXCC AS DXCC, COL_FREQ_RX, COL_COUNTRY as Country, COL_BAND as BAND,
+        Dim sql = $"SELECT COL_DXCC AS DXCC, COL_FREQ_RX, COL_COUNTRY as Country, COL_BAND as BAND,
                                     CASE WHEN {Phone} THEN 'Phone'
                                     WHEN {CW} THEN 'CW'
                                     WHEN {Digital} THEN 'Digital'
@@ -204,8 +200,7 @@ Public Class Form1
                                     WHERE COL_CALL='{callsign}'
                                     GROUP BY BAND,MODE
                                     ORDER BY COL_FREQ DESC"       ' get records of this callsign
-                .CommandType = CommandType.Text
-            End With
+        Using cmd As New SqliteCommand(sql, con)
             Dim lbl1 = tab.Controls.Find($"Label1_{callsign}", True).FirstOrDefault()
             sqldr = cmd.ExecuteReader
             Dim PartialLabel = $"QSO for {callsign}"
@@ -280,7 +275,7 @@ Public Class Form1
             End Using
         End If
 
-        Dim sql As String = $"SELECT COL_DXCC AS DXCC, COL_BAND as BAND,
+        sql = $"SELECT COL_DXCC AS DXCC, COL_BAND as BAND,
                                             CASE WHEN {Phone} THEN 'Phone'
                                             WHEN {CW} THEN 'CW'
                                             WHEN {Digital} THEN 'Digital'
